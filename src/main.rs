@@ -246,14 +246,30 @@ fn find_expression(digits: &str, target: f64) -> Option<Expression> {
     const EPSILON: f64 = 1e-9;
 
     let all_expressions = generate_expressions(digits, 0, digits.len());
+    let total_expressions = all_expressions.len();
+
+    eprintln!("Generated {} expressions to evaluate", total_expressions);
+
+    let mut evaluated_count = 0;
+    let mut valid_count = 0;
 
     for expr in all_expressions {
+        evaluated_count += 1;
         if let Ok(value) = expr.evaluate() {
+            valid_count += 1;
             if (value - target).abs() < EPSILON {
+                eprintln!(
+                    "Found match after evaluating {} expressions ({} valid)",
+                    evaluated_count, valid_count
+                );
                 return Some(expr);
             }
         }
     }
 
+    eprintln!(
+        "No match found. Evaluated {} expressions ({} valid)",
+        evaluated_count, valid_count
+    );
     None
 }
