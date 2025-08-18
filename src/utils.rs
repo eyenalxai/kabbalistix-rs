@@ -17,6 +17,8 @@ pub enum UtilsError {
 }
 
 /// Generate all possible ways to partition a range of digits into consecutive blocks
+///
+/// This uses an iterative approach to avoid stack overflow with large ranges.
 pub fn generate_partitions(
     start: usize,
     end: usize,
@@ -31,13 +33,36 @@ pub fn generate_partitions(
         return vec![vec![(start, end)]];
     }
 
+    if num_blocks > (end - start) {
+        // Can't have more blocks than positions
+        return vec![];
+    }
+
     let mut result = Vec::new();
-    for split_point in start + 1..end {
-        let first_block = (start, split_point);
-        for mut rest in generate_partitions(split_point, end, num_blocks - 1) {
-            let mut partition = vec![first_block];
-            partition.append(&mut rest);
+
+    // Use iterative approach with a stack to avoid recursion
+    // Stack contains: (current_partition, remaining_start, remaining_blocks)
+    let mut stack = Vec::new();
+    stack.push((Vec::new(), start, num_blocks));
+
+    while let Some((current_partition, remaining_start, remaining_blocks)) = stack.pop() {
+        if remaining_blocks == 1 {
+            // Last block takes the rest of the range
+            let mut partition = current_partition;
+            partition.push((remaining_start, end));
             result.push(partition);
+            continue;
+        }
+
+        // Try all possible split points for the next block
+        // Ensure we leave enough positions for the remaining blocks
+        let min_end = remaining_start + 1;
+        let max_end = end - (remaining_blocks - 1); // Leave at least 1 position per remaining block
+
+        for split_point in min_end..=max_end {
+            let mut new_partition = current_partition.clone();
+            new_partition.push((remaining_start, split_point));
+            stack.push((new_partition, split_point, remaining_blocks - 1));
         }
     }
 
@@ -124,6 +149,47 @@ mod tests {
         let partitions = generate_partitions(0, 3, 2);
         let expected = vec![vec![(0, 1), (1, 3)], vec![(0, 2), (2, 3)]];
         assert_eq!(partitions, expected);
+    }
+
+    #[test]
+    fn test_generate_partitions_three_blocks() {
+        let partitions = generate_partitions(0, 4, 3);
+        let expected = vec![
+            vec![(0, 1), (1, 2), (2, 4)],
+            vec![(0, 1), (1, 3), (3, 4)],
+            vec![(0, 2), (2, 3), (3, 4)],
+        ];
+        assert_eq!(partitions, expected);
+    }
+
+    #[test]
+    fn test_generate_partitions_impossible() {
+        // Can't partition 3 positions into 4 blocks
+        let partitions = generate_partitions(0, 3, 4);
+        assert_eq!(partitions, Vec::<Vec<(usize, usize)>>::new());
+    }
+
+    #[test]
+    fn test_generate_partitions_large_range() {
+        // Test that large ranges don't cause stack overflow
+        let partitions = generate_partitions(0, 20, 5);
+        assert!(!partitions.is_empty());
+
+        // Verify all partitions are valid
+        for partition in &partitions {
+            assert_eq!(partition.len(), 5);
+            if let (Some(first), Some(last)) = (partition.first(), partition.last()) {
+                assert_eq!(first.0, 0);
+                assert_eq!(last.1, 20);
+            }
+
+            // Check continuity
+            for i in 0..4 {
+                if let (Some(current), Some(next)) = (partition.get(i), partition.get(i + 1)) {
+                    assert_eq!(current.1, next.0);
+                }
+            }
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::collections::{HashMap, VecDeque};
 // Default configuration constants
 const MAX_ROOT_DEGREE: f64 = 10.0;
 const MAX_CACHE_SIZE: usize = 1000; // Limit cache size to prevent unbounded growth
+const MAX_WORK_QUEUE_SIZE: usize = 100_000; // Prevent memory exhaustion from work queue explosion
 
 /// Lightweight state for generating expressions from a range without storing them
 #[derive(Debug, Clone)]
@@ -98,6 +99,20 @@ pub enum GenerationState {
 }
 
 impl ExpressionIterator {
+    /// Add a work item to the queue if within bounds
+    fn try_add_work_item(&mut self, item: WorkItem) -> bool {
+        if self.work_queue.len() < MAX_WORK_QUEUE_SIZE {
+            self.work_queue.push_back(item);
+            true
+        } else {
+            log::warn!(
+                "Work queue size limit reached ({}), skipping further work items to prevent memory exhaustion",
+                MAX_WORK_QUEUE_SIZE
+            );
+            false
+        }
+    }
+
     /// Generate the next expression for a given range and iterator state
     fn generate_next_expression(
         &mut self,
@@ -374,14 +389,16 @@ impl Iterator for ExpressionIterator {
                         if length >= 2 {
                             // Try different numbers of blocks, starting with 2
                             for num_blocks in 2..=std::cmp::min(length, 7) {
-                                self.work_queue.push_back(WorkItem {
+                                if !self.try_add_work_item(WorkItem {
                                     start: item.start,
                                     end: item.end,
                                     state: GenerationState::InitBinary {
                                         num_blocks,
                                         partition_idx: 0,
                                     },
-                                });
+                                }) {
+                                    break; // Stop adding if queue is full
+                                }
                             }
                         }
 
@@ -404,7 +421,7 @@ impl Iterator for ExpressionIterator {
                                 (partition.first(), partition.get(1))
                             {
                                 // Queue binary operations with range info instead of storing expressions
-                                self.work_queue.push_back(WorkItem {
+                                self.try_add_work_item(WorkItem {
                                     start: item.start,
                                     end: item.end,
                                     state: GenerationState::BinaryOps {
@@ -422,7 +439,7 @@ impl Iterator for ExpressionIterator {
                                 if end1 - start1 > 2 {
                                     let sub_length = end1 - start1;
                                     for sub_blocks in 2..=std::cmp::min(sub_length, 7) {
-                                        self.work_queue.push_back(WorkItem {
+                                        self.try_add_work_item(WorkItem {
                                             start: start1,
                                             end: end1,
                                             state: GenerationState::InitBinary {
@@ -435,7 +452,7 @@ impl Iterator for ExpressionIterator {
                                 if end2 - start2 > 2 {
                                     let sub_length = end2 - start2;
                                     for sub_blocks in 2..=std::cmp::min(sub_length, 7) {
-                                        self.work_queue.push_back(WorkItem {
+                                        self.try_add_work_item(WorkItem {
                                             start: start2,
                                             end: end2,
                                             state: GenerationState::InitBinary {
@@ -463,7 +480,7 @@ impl Iterator for ExpressionIterator {
 
                             // Generate n-ary operations for all valid partitions
                             if all_valid && operands.len() == num_blocks {
-                                self.work_queue.push_back(WorkItem {
+                                self.try_add_work_item(WorkItem {
                                     start: item.start,
                                     end: item.end,
                                     state: GenerationState::NAryOps {
@@ -476,7 +493,7 @@ impl Iterator for ExpressionIterator {
                         }
 
                         // Queue next partition
-                        self.work_queue.push_back(WorkItem {
+                        self.try_add_work_item(WorkItem {
                             start: item.start,
                             end: item.end,
                             state: GenerationState::InitBinary {
@@ -486,7 +503,7 @@ impl Iterator for ExpressionIterator {
                         });
                     } else {
                         // Move to nth root operations
-                        self.work_queue.push_back(WorkItem {
+                        self.try_add_work_item(WorkItem {
                             start: item.start,
                             end: item.end,
                             state: GenerationState::InitNthRoot { partition_idx: 0 },
@@ -564,7 +581,7 @@ impl Iterator for ExpressionIterator {
                                         None // Will get next left expression
                                     };
 
-                                    self.work_queue.push_back(WorkItem {
+                                    self.try_add_work_item(WorkItem {
                                         start: item.start,
                                         end: item.end,
                                         state: GenerationState::BinaryOps {
@@ -590,7 +607,7 @@ impl Iterator for ExpressionIterator {
                             }
                         } else {
                             // Right iterator exhausted, get next left
-                            self.work_queue.push_back(WorkItem {
+                            self.try_add_work_item(WorkItem {
                                 start: item.start,
                                 end: item.end,
                                 state: GenerationState::BinaryOps {
@@ -637,7 +654,7 @@ impl Iterator for ExpressionIterator {
                             }
 
                             // Queue next operation type
-                            self.work_queue.push_back(WorkItem {
+                            self.try_add_work_item(WorkItem {
                                 start: item.start,
                                 end: item.end,
                                 state: GenerationState::NAryOps {
@@ -662,7 +679,7 @@ impl Iterator for ExpressionIterator {
                             }
 
                             // Queue next operation type (subtraction)
-                            self.work_queue.push_back(WorkItem {
+                            self.try_add_work_item(WorkItem {
                                 start: item.start,
                                 end: item.end,
                                 state: GenerationState::NAryOps {
@@ -688,7 +705,7 @@ impl Iterator for ExpressionIterator {
 
                             // Queue mixed operation (first - second + rest)
                             if operands.len() >= 3 {
-                                self.work_queue.push_back(WorkItem {
+                                self.try_add_work_item(WorkItem {
                                     start: item.start,
                                     end: item.end,
                                     state: GenerationState::NAryOps {
@@ -738,7 +755,7 @@ impl Iterator for ExpressionIterator {
                             if let Ok(n_num) = digits_to_number(&self.digits, start1, end1) {
                                 if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= MAX_ROOT_DEGREE
                                 {
-                                    self.work_queue.push_back(WorkItem {
+                                    self.try_add_work_item(WorkItem {
                                         start: item.start,
                                         end: item.end,
                                         state: GenerationState::NthRoots {
@@ -753,7 +770,7 @@ impl Iterator for ExpressionIterator {
                         }
 
                         // Queue next partition
-                        self.work_queue.push_back(WorkItem {
+                        self.try_add_work_item(WorkItem {
                             start: item.start,
                             end: item.end,
                             state: GenerationState::InitNthRoot {
@@ -762,7 +779,7 @@ impl Iterator for ExpressionIterator {
                         });
                     } else if length > 1 {
                         // Move to negation operations
-                        self.work_queue.push_back(WorkItem {
+                        self.try_add_work_item(WorkItem {
                             start: item.start,
                             end: item.end,
                             state: GenerationState::InitNegations,
@@ -783,7 +800,7 @@ impl Iterator for ExpressionIterator {
 
                         // Queue next iteration if there are more expressions
                         if !a_iterator_state.exhausted {
-                            self.work_queue.push_back(WorkItem {
+                            self.try_add_work_item(WorkItem {
                                 start: item.start,
                                 end: item.end,
                                 state: GenerationState::NthRoots {
@@ -805,7 +822,7 @@ impl Iterator for ExpressionIterator {
                 GenerationState::InitNegations => {
                     // Only negate expressions for small ranges to keep it simple
                     if length <= 4 {
-                        self.work_queue.push_back(WorkItem {
+                        self.try_add_work_item(WorkItem {
                             start: item.start,
                             end: item.end,
                             state: GenerationState::Negations {
@@ -835,7 +852,7 @@ impl Iterator for ExpressionIterator {
                         if matches!(expr, Expression::Neg(_)) {
                             // Queue next iteration without returning anything
                             if !base_iterator_state.exhausted {
-                                self.work_queue.push_back(WorkItem {
+                                self.try_add_work_item(WorkItem {
                                     start: item.start,
                                     end: item.end,
                                     state: GenerationState::Negations {
@@ -850,7 +867,7 @@ impl Iterator for ExpressionIterator {
 
                         // Queue next iteration if there are more expressions
                         if !base_iterator_state.exhausted {
-                            self.work_queue.push_back(WorkItem {
+                            self.try_add_work_item(WorkItem {
                                 start: item.start,
                                 end: item.end,
                                 state: GenerationState::Negations {

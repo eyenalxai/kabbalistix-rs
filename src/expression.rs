@@ -43,6 +43,39 @@ impl fmt::Display for Expression {
     }
 }
 
+/// Check if a floating-point number is effectively zero
+fn is_zero(value: f64) -> bool {
+    value.abs() < f64::EPSILON
+}
+
+/// Check if a floating-point number is effectively an integer
+fn is_integer(value: f64) -> bool {
+    // Handle edge cases for very large numbers where fract() might not work properly
+    if value.abs() > 2_f64.powi(52) {
+        // For numbers larger than 2^52, floating-point precision means they're effectively integers
+        true
+    } else {
+        (value - value.round()).abs() < f64::EPSILON
+    }
+}
+
+/// Check if a floating-point number is an even integer
+fn is_even_integer(value: f64) -> bool {
+    if !is_integer(value) {
+        return false;
+    }
+
+    // For very large numbers, use modular arithmetic carefully
+    if value.abs() > 2_f64.powi(52) {
+        // For numbers this large, we can't reliably determine even/odd
+        // Conservative approach: assume even to be safe
+        true
+    } else {
+        let rounded = value.round();
+        (rounded % 2.0).abs() < f64::EPSILON
+    }
+}
+
 impl Expression {
     /// Evaluates the expression and returns the result
     ///
@@ -76,7 +109,7 @@ impl Expression {
             Expression::Div(l, r) => {
                 let left = l.evaluate()?;
                 let right = r.evaluate()?;
-                if right == 0.0 {
+                if is_zero(right) {
                     debug!("Division by zero attempted");
                     Err(ExpressionError::DivisionByZero)
                 } else {
@@ -86,7 +119,7 @@ impl Expression {
             Expression::Pow(l, r) => {
                 let left = l.evaluate()?;
                 let right = r.evaluate()?;
-                if left < 0.0 && right.fract() != 0.0 {
+                if left < 0.0 && !is_integer(right) {
                     debug!(
                         "Complex result from negative base with fractional exponent: {}^{}",
                         left, right
@@ -103,16 +136,17 @@ impl Expression {
             Expression::NthRoot(n, a) => {
                 let n_val = n.evaluate()?;
                 let a_val = a.evaluate()?;
-                if n_val < 2.0 || n_val.fract() != 0.0 {
+
+                if n_val < 2.0 || !is_integer(n_val) {
                     debug!("Invalid root index: {}", n_val);
                     Err(ExpressionError::InvalidRootIndex)
-                } else if a_val < 0.0 && (n_val as i32) % 2 == 0 {
+                } else if a_val < 0.0 && is_even_integer(n_val) {
                     debug!(
                         "Even root of negative number: {}th root of {}",
                         n_val, a_val
                     );
                     Err(ExpressionError::EvenRootOfNegative)
-                } else if a_val < 0.0 && (n_val as i32) % 2 == 1 {
+                } else if a_val < 0.0 && !is_even_integer(n_val) {
                     // Odd root of negative number: compute as -((-a)^(1/n))
                     debug!(
                         "Computing odd root of negative: {}th root of {}",
@@ -137,6 +171,37 @@ impl Expression {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_zero() {
+        assert!(is_zero(0.0));
+        assert!(is_zero(f64::EPSILON / 2.0));
+        assert!(!is_zero(f64::EPSILON * 2.0));
+        assert!(!is_zero(1.0));
+    }
+
+    #[test]
+    fn test_is_integer() {
+        assert!(is_integer(1.0));
+        assert!(is_integer(42.0));
+        assert!(is_integer(-17.0));
+        assert!(!is_integer(1.5));
+        assert!(!is_integer(1.234_567));
+
+        // Test large numbers
+        assert!(is_integer(2_f64.powi(53))); // Should be treated as integer
+        assert!(is_integer(1e15)); // Large but representable exactly
+    }
+
+    #[test]
+    fn test_is_even_integer() {
+        assert!(is_even_integer(2.0));
+        assert!(is_even_integer(4.0));
+        assert!(is_even_integer(-6.0));
+        assert!(!is_even_integer(1.0));
+        assert!(!is_even_integer(3.0));
+        assert!(!is_even_integer(1.5));
+    }
 
     #[test]
     fn test_nth_root_cube_root() {
@@ -328,5 +393,33 @@ mod tests {
         );
         let display = format!("{}", expr);
         assert_eq!(display, "√3(27)");
+    }
+
+    #[test]
+    fn test_division_by_small_number() {
+        // Test division by very small number (near zero)
+        let expr = Expression::Div(
+            Box::new(Expression::Number(1.0)),
+            Box::new(Expression::Number(f64::EPSILON / 2.0)),
+        );
+        let result = expr.evaluate();
+        assert!(
+            result.is_err(),
+            "Expected division by zero error for very small divisor"
+        );
+    }
+
+    #[test]
+    fn test_power_with_large_fractional_exponent() {
+        // Test that large fractional numbers are handled correctly
+        let expr = Expression::Pow(
+            Box::new(Expression::Number(-2.0)),
+            Box::new(Expression::Number(1000000.1)), // Large fractional
+        );
+        let result = expr.evaluate();
+        assert!(
+            result.is_err(),
+            "Expected complex result error for negative base with fractional exponent"
+        );
     }
 }
