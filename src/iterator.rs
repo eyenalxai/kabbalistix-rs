@@ -172,8 +172,11 @@ impl Iterator for ExpressionIterator {
     type Item = Expression;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let full_length = self.digits.len();
+
         while let Some(item) = self.work_queue.pop_front() {
             let length = item.end - item.start;
+            let is_full_range = item.start == 0 && item.end == full_length;
 
             match item.state {
                 GenerationState::BaseNumber => {
@@ -193,7 +196,11 @@ impl Iterator for ExpressionIterator {
                                 });
                             }
                         }
-                        return Some(Expression::Number(num));
+
+                        // Only return expressions that use all digits
+                        if is_full_range {
+                            return Some(Expression::Number(num));
+                        }
                     }
                 }
 
@@ -379,7 +386,10 @@ impl Iterator for ExpressionIterator {
                             });
                         }
 
-                        return Some(expr);
+                        // Only return expressions that use all digits
+                        if is_full_range {
+                            return Some(expr);
+                        }
                     }
                 }
 
@@ -408,7 +418,10 @@ impl Iterator for ExpressionIterator {
                                 },
                             });
 
-                            return Some(result);
+                            // Only return expressions that use all digits
+                            if is_full_range {
+                                return Some(result);
+                            }
                         }
                     } else if op_idx == 1 {
                         // N-ary multiplication: multiply all operands
@@ -418,7 +431,10 @@ impl Iterator for ExpressionIterator {
                                 result =
                                     Expression::Mul(Box::new(result), Box::new(operand.clone()));
                             }
-                            return Some(result);
+                            // Only return expressions that use all digits
+                            if is_full_range {
+                                return Some(result);
+                            }
                         }
                     }
                 }
@@ -496,10 +512,13 @@ impl Iterator for ExpressionIterator {
                             });
                         }
 
-                        return Some(Expression::NthRoot(
-                            Box::new(n_expr),
-                            Box::new(a_expr.clone()),
-                        ));
+                        // Only return expressions that use all digits
+                        if is_full_range {
+                            return Some(Expression::NthRoot(
+                                Box::new(n_expr),
+                                Box::new(a_expr.clone()),
+                            ));
+                        }
                     }
                 }
 
@@ -545,7 +564,10 @@ impl Iterator for ExpressionIterator {
                             });
                         }
 
-                        return Some(Expression::Neg(Box::new(expr.clone())));
+                        // Only return expressions that use all digits
+                        if is_full_range {
+                            return Some(Expression::Neg(Box::new(expr.clone())));
+                        }
                     }
                 }
             }
