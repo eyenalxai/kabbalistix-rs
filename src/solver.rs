@@ -40,12 +40,29 @@ impl ExpressionSolver {
         Self { config }
     }
 
+    /// Get a reference to the solver configuration
+    pub fn config(&self) -> &SolverConfig {
+        &self.config
+    }
+
     /// Find an expression from the given digits that evaluates to the target
     pub fn find_expression(&self, digits: &str, target: f64) -> Option<Expression> {
+        self.find_expression_with_verbose(digits, target, false)
+    }
+
+    /// Find an expression from the given digits that evaluates to the target with optional verbose output
+    pub fn find_expression_with_verbose(
+        &self,
+        digits: &str,
+        target: f64,
+        verbose: bool,
+    ) -> Option<Expression> {
         let all_expressions = self.generate_expressions(digits, 0, digits.len());
         let total_expressions = all_expressions.len();
 
-        eprintln!("Generated {} expressions to evaluate", total_expressions);
+        if verbose {
+            eprintln!("Generated {} expressions to evaluate", total_expressions);
+        }
 
         let mut evaluated_count = 0;
         let mut valid_count = 0;
@@ -55,19 +72,23 @@ impl ExpressionSolver {
             if let Ok(value) = expr.evaluate() {
                 valid_count += 1;
                 if (value - target).abs() < self.config.epsilon {
-                    eprintln!(
-                        "Found match after evaluating {} expressions ({} valid)",
-                        evaluated_count, valid_count
-                    );
+                    if verbose {
+                        eprintln!(
+                            "Found match after evaluating {} expressions ({} valid)",
+                            evaluated_count, valid_count
+                        );
+                    }
                     return Some(expr);
                 }
             }
         }
 
-        eprintln!(
-            "No match found. Evaluated {} expressions ({} valid)",
-            evaluated_count, valid_count
-        );
+        if verbose {
+            eprintln!(
+                "No match found. Evaluated {} expressions ({} valid)",
+                evaluated_count, valid_count
+            );
+        }
         None
     }
 
