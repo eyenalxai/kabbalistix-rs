@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 const MAX_ROOT_DEGREE: f64 = 10.0;
 
 /// Iterative expression generator that yields expressions one at a time without storing them
+#[derive(Debug, Clone)]
 pub struct ExpressionIterator {
     work_queue: VecDeque<WorkItem>,
     digits: String,
@@ -34,6 +35,7 @@ pub enum GenerationState {
         right_idx: usize,
         op_idx: usize, // 0=Add, 1=Sub, 2=Mul, 3=Div, 4=Pow
     },
+
     /// Generate nth root operations for a specific partition
     NthRoots {
         partition_idx: usize,
@@ -87,7 +89,7 @@ impl ExpressionIterator {
         }
     }
 
-    /// Get expressions for small ranges (≤ 2 digits) with caching
+    /// Get expressions for small ranges (≤ 4 digits) with caching
     fn get_small_expressions(&mut self, start: usize, end: usize) -> Vec<Expression> {
         let key = (start, end);
         if let Some(cached) = self.small_cache.get(&key) {
@@ -102,49 +104,105 @@ impl ExpressionIterator {
         }
 
         let length = end - start;
-        if length == 2 {
-            let partitions = generate_partitions(start, end, 2);
+        if length >= 2 {
+            // Generate all possible partitions up to the range size
+            for num_blocks in 2..=std::cmp::min(length, 4) {
+                let partitions = generate_partitions(start, end, num_blocks);
 
-            // Binary operations for 2-digit combinations
-            for partition in &partitions {
-                if let (Some(&(start1, end1)), Some(&(start2, end2))) =
-                    (partition.first(), partition.get(1))
-                {
-                    if let (Ok(left_num), Ok(right_num)) = (
-                        digits_to_number(&self.digits, start1, end1),
-                        digits_to_number(&self.digits, start2, end2),
-                    ) {
-                        let left = Expression::Number(left_num);
-                        let right = Expression::Number(right_num);
-
-                        expressions.push(Expression::Add(
-                            Box::new(left.clone()),
-                            Box::new(right.clone()),
-                        ));
-                        expressions.push(Expression::Sub(
-                            Box::new(left.clone()),
-                            Box::new(right.clone()),
-                        ));
-                        expressions.push(Expression::Mul(
-                            Box::new(left.clone()),
-                            Box::new(right.clone()),
-                        ));
-                        expressions.push(Expression::Div(
-                            Box::new(left.clone()),
-                            Box::new(right.clone()),
-                        ));
-                        expressions.push(Expression::Pow(
-                            Box::new(left.clone()),
-                            Box::new(right.clone()),
-                        ));
-
-                        // Nth root if applicable
-                        if left_num >= 2.0 && left_num.fract() == 0.0 && left_num <= MAX_ROOT_DEGREE
+                for partition in &partitions {
+                    if num_blocks == 2 {
+                        // Binary operations
+                        if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                            (partition.first(), partition.get(1))
                         {
-                            expressions.push(Expression::NthRoot(
-                                Box::new(left.clone()),
-                                Box::new(right.clone()),
-                            ));
+                            let left_exprs = if end1 - start1 == 1 {
+                                if let Ok(num) = digits_to_number(&self.digits, start1, end1) {
+                                    vec![Expression::Number(num)]
+                                } else {
+                                    vec![]
+                                }
+                            } else {
+                                // Recursively get expressions for this sub-range
+                                self.get_small_expressions(start1, end1)
+                            };
+
+                            let right_exprs = if end2 - start2 == 1 {
+                                if let Ok(num) = digits_to_number(&self.digits, start2, end2) {
+                                    vec![Expression::Number(num)]
+                                } else {
+                                    vec![]
+                                }
+                            } else {
+                                self.get_small_expressions(start2, end2)
+                            };
+
+                            // Combine all left and right expressions
+                            for left in &left_exprs {
+                                for right in &right_exprs {
+                                    expressions.push(Expression::Add(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ));
+                                    expressions.push(Expression::Sub(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ));
+                                    expressions.push(Expression::Mul(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ));
+                                    expressions.push(Expression::Div(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ));
+                                    expressions.push(Expression::Pow(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ));
+
+                                    // Nth root if left is a valid root index
+                                    if let Expression::Number(n) = left {
+                                        if *n >= 2.0 && n.fract() == 0.0 && *n <= MAX_ROOT_DEGREE {
+                                            expressions.push(Expression::NthRoot(
+                                                Box::new(left.clone()),
+                                                Box::new(right.clone()),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // N-ary operations for 3+ operands
+                        let mut operands = Vec::new();
+                        let mut all_valid = true;
+
+                        for &(start_i, end_i) in partition {
+                            if end_i - start_i == 1 {
+                                if let Ok(num) = digits_to_number(&self.digits, start_i, end_i) {
+                                    operands.push(vec![Expression::Number(num)]);
+                                } else {
+                                    all_valid = false;
+                                    break;
+                                }
+                            } else {
+                                let sub_exprs = self.get_small_expressions(start_i, end_i);
+                                if sub_exprs.is_empty() {
+                                    all_valid = false;
+                                    break;
+                                }
+                                operands.push(sub_exprs);
+                            }
+                        }
+
+                        if all_valid {
+                            // Generate n-ary combinations
+                            self.generate_nary_combinations_small(
+                                &mut expressions,
+                                &operands,
+                                0,
+                                Vec::new(),
+                            );
                         }
                     }
                 }
@@ -165,6 +223,58 @@ impl ExpressionIterator {
 
         self.small_cache.insert(key, expressions.clone());
         expressions
+    }
+
+    /// Generate all combinations of n-ary operations for small ranges
+    #[allow(clippy::only_used_in_recursion)]
+    fn generate_nary_combinations_small(
+        &self,
+        expressions: &mut Vec<Expression>,
+        all_operands: &[Vec<Expression>],
+        depth: usize,
+        current_combo: Vec<Expression>,
+    ) {
+        if depth == all_operands.len() {
+            if current_combo.len() >= 2 {
+                if let Some(first) = current_combo.first() {
+                    // N-ary addition
+                    let mut result = first.clone();
+                    for operand in current_combo.iter().skip(1) {
+                        result = Expression::Add(Box::new(result), Box::new(operand.clone()));
+                    }
+                    expressions.push(result);
+
+                    // N-ary multiplication
+                    let mut result = first.clone();
+                    for operand in current_combo.iter().skip(1) {
+                        result = Expression::Mul(Box::new(result), Box::new(operand.clone()));
+                    }
+                    expressions.push(result);
+
+                    // N-ary subtraction
+                    let mut result = first.clone();
+                    for operand in current_combo.iter().skip(1) {
+                        result = Expression::Sub(Box::new(result), Box::new(operand.clone()));
+                    }
+                    expressions.push(result);
+                }
+            }
+            return;
+        }
+
+        // Try each expression at this depth level
+        if let Some(operands_at_depth) = all_operands.get(depth) {
+            for expr in operands_at_depth {
+                let mut new_combo = current_combo.clone();
+                new_combo.push(expr.clone());
+                self.generate_nary_combinations_small(
+                    expressions,
+                    all_operands,
+                    depth + 1,
+                    new_combo,
+                );
+            }
+        }
     }
 }
 
@@ -216,11 +326,11 @@ impl Iterator for ExpressionIterator {
                                 (partition.first(), partition.get(1))
                             {
                                 // Get expressions for left and right parts
-                                let left_exprs = if end1 - start1 <= 2 {
+                                let left_exprs = if end1 - start1 <= 4 {
+                                    // Increased from 2 to 4
                                     self.get_small_expressions(start1, end1)
                                 } else {
                                     // For larger ranges, generate a single base number expression
-                                    // The recursive partitioning will be handled by separate work items
                                     if let Ok(num) = digits_to_number(&self.digits, start1, end1) {
                                         vec![Expression::Number(num)]
                                     } else {
@@ -228,7 +338,8 @@ impl Iterator for ExpressionIterator {
                                     }
                                 };
 
-                                let right_exprs = if end2 - start2 <= 2 {
+                                let right_exprs = if end2 - start2 <= 4 {
+                                    // Increased from 2 to 4
                                     self.get_small_expressions(start2, end2)
                                 } else {
                                     // For larger ranges, generate a single base number expression
