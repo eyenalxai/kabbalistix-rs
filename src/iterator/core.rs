@@ -1,163 +1,18 @@
 use crate::expression::Expression;
 use crate::utils::{digits_to_number, generate_partitions};
-use log::info;
-
+use log::{info, warn};
 use std::collections::{HashMap, VecDeque};
 
-// Configuration constants
-const MAX_ROOT_DEGREE: f64 = 10.0;
-const MAX_CACHE_SIZE: usize = 1000;
-const MAX_WORK_QUEUE_SIZE: usize = 100_000;
-const SMALL_RANGE_THRESHOLD: usize = 4;
+use super::constants::{MAX_CACHE_SIZE, MAX_WORK_QUEUE_SIZE, SMALL_RANGE_THRESHOLD};
+use super::generator::ExpressionGenerator;
+use super::state::ExpressionIteratorState;
+use super::types::{GenerationState, WorkItem};
 
-/// Lightweight state for generating expressions from a range without storing them
-#[derive(Debug, Clone)]
-pub struct ExpressionIteratorState {
-    /// Current complexity level being generated (1=base numbers, 2=binary ops, etc.)
-    complexity: usize,
-    /// Position within current complexity level
-    position: usize,
-    /// Whether this iterator is exhausted
-    exhausted: bool,
-}
-
-impl ExpressionIteratorState {
-    fn new() -> Self {
-        Self {
-            complexity: 1,
-            position: 0,
-            exhausted: false,
-        }
-    }
-
-    fn advance(&mut self) {
-        self.position += 1;
-    }
-
-    fn mark_exhausted(&mut self) {
-        self.exhausted = true;
-    }
-}
-
-/// Helper for generating expressions from operands
-struct ExpressionGenerator;
-
-impl ExpressionGenerator {
-    /// Generate binary operations from two expressions
-    fn generate_binary_ops(left: &Expression, right: &Expression) -> Vec<Expression> {
-        vec![
-            Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
-            Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
-            Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
-            Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
-            Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
-        ]
-    }
-
-    /// Generate nth root if left is a valid root index
-    fn generate_nth_root(n: &Expression, a: &Expression) -> Option<Expression> {
-        if let Expression::Number(n_val) = n {
-            if *n_val >= 2.0 && n_val.fract() == 0.0 && *n_val <= MAX_ROOT_DEGREE {
-                return Some(Expression::NthRoot(
-                    Box::new(n.clone()),
-                    Box::new(a.clone()),
-                ));
-            }
-        }
-        None
-    }
-
-    /// Generate n-ary operations from a list of operands
-    fn generate_nary_ops(operands: &[Expression]) -> Vec<Expression> {
-        if operands.len() < 2 {
-            return Vec::new();
-        }
-
-        let mut results = Vec::new();
-        let first = operands.first().unwrap_or(&Expression::Number(0.0));
-
-        // N-ary addition
-        let mut add_result = first.clone();
-        for operand in operands.iter().skip(1) {
-            add_result = Expression::Add(Box::new(add_result), Box::new(operand.clone()));
-        }
-        results.push(add_result);
-
-        // N-ary multiplication
-        let mut mul_result = first.clone();
-        for operand in operands.iter().skip(1) {
-            mul_result = Expression::Mul(Box::new(mul_result), Box::new(operand.clone()));
-        }
-        results.push(mul_result);
-
-        // N-ary subtraction (first - rest)
-        let mut sub_result = first.clone();
-        for operand in operands.iter().skip(1) {
-            sub_result = Expression::Sub(Box::new(sub_result), Box::new(operand.clone()));
-        }
-        results.push(sub_result);
-
-        // Mixed operation (first - second + rest) for 3+ operands
-        if operands.len() >= 3 {
-            let mut mixed_result = Expression::Sub(
-                Box::new(first.clone()),
-                Box::new(operands.get(1).unwrap_or(&Expression::Number(0.0)).clone()),
-            );
-            for operand in operands.iter().skip(2) {
-                mixed_result = Expression::Add(Box::new(mixed_result), Box::new(operand.clone()));
-            }
-            results.push(mixed_result);
-        }
-
-        results
-    }
-}
-
-/// Iterative expression generator that yields expressions one at a time without storing them
 #[derive(Debug, Clone)]
 pub struct ExpressionIterator {
     work_queue: VecDeque<WorkItem>,
     digits: String,
     small_cache: HashMap<(usize, usize), Vec<Expression>>, // Cache for small ranges only
-}
-
-#[derive(Debug, Clone)]
-pub struct WorkItem {
-    pub start: usize,
-    pub end: usize,
-    pub state: GenerationState,
-}
-
-#[derive(Debug, Clone)]
-pub enum GenerationState {
-    /// Generate the base number
-    BaseNumber,
-    /// Process partitions for a given number of blocks
-    ProcessPartitions {
-        num_blocks: usize,
-        partition_idx: usize,
-    },
-    /// Generate binary operations
-    BinaryOps {
-        partition_idx: usize,
-        left_range: (usize, usize),
-        right_range: (usize, usize),
-        left_iterator_state: ExpressionIteratorState,
-        right_iterator_state: Option<ExpressionIteratorState>,
-        current_left: Option<Expression>,
-        op_idx: usize, // 0=Add, 1=Sub, 2=Mul, 3=Div, 4=Pow, 5=NthRoot
-    },
-    /// Generate n-ary operations
-    NAryOps {
-        partition: Vec<(usize, usize)>,
-        op_idx: usize, // 0=Add, 1=Mul, 2=Sub, 3=Mixed
-    },
-    /// Generate negation operations
-    Negations {
-        base_range: (usize, usize),
-        base_iterator_state: ExpressionIteratorState,
-        skip_base_number: bool,
-    },
 }
 
 impl ExpressionIterator {
@@ -167,7 +22,7 @@ impl ExpressionIterator {
             self.work_queue.push_back(item);
             true
         } else {
-            log::warn!(
+            warn!(
                 "Work queue size limit reached ({}), skipping further work items to prevent memory exhaustion",
                 MAX_WORK_QUEUE_SIZE
             );
