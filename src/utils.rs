@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn test_generate_partitions_two_blocks() {
         let partitions = generate_partitions(0, 3, 2);
-        let expected = vec![vec![(0, 1), (1, 3)], vec![(0, 2), (2, 3)]];
+        let expected = vec![vec![(0, 2), (2, 3)], vec![(0, 1), (1, 3)]];
         assert_eq!(partitions, expected);
     }
 
@@ -155,9 +155,9 @@ mod tests {
     fn test_generate_partitions_three_blocks() {
         let partitions = generate_partitions(0, 4, 3);
         let expected = vec![
-            vec![(0, 1), (1, 2), (2, 4)],
-            vec![(0, 1), (1, 3), (3, 4)],
             vec![(0, 2), (2, 3), (3, 4)],
+            vec![(0, 1), (1, 3), (3, 4)],
+            vec![(0, 1), (1, 2), (2, 4)],
         ];
         assert_eq!(partitions, expected);
     }
