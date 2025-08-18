@@ -288,4 +288,45 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_seven_twos_equals_4096() {
+        // Test that "2222222" can produce 4096 via 2^((2+2) + (2^2) + (2*2))
+        // Expected: 2^(4 + 4 + 4) = 2^12 = 4096
+        let solver = ExpressionSolver::new();
+        let result = solver.find_expression("2222222", 4096.0);
+
+        assert!(
+            result.is_some(),
+            "Should find an expression that equals 4096 using all seven 2's"
+        );
+
+        if let Some(expr) = result {
+            assert!(
+                expr.evaluate().is_ok(),
+                "Expression should evaluate successfully"
+            );
+            let value = if let Ok(v) = expr.evaluate() {
+                v
+            } else {
+                return;
+            };
+            assert!(
+                (value - 4096.0).abs() < 1e-9,
+                "Expression should evaluate to 4096, got {}",
+                value
+            );
+
+            let expr_str = format!("{}", expr);
+            println!("Found expression for 2222222->4096: {}", expr_str);
+
+            // Verify it contains seven 2's
+            let two_count = expr_str.matches('2').count();
+            assert_eq!(
+                two_count, 7,
+                "Expression should contain exactly 7 twos, found {} in: {}",
+                two_count, expr_str
+            );
+        }
+    }
 }
