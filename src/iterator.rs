@@ -32,12 +32,6 @@ impl ExpressionIteratorState {
         self.position += 1;
     }
 
-    #[allow(dead_code)]
-    fn next_complexity(&mut self) {
-        self.complexity += 1;
-        self.position = 0;
-    }
-
     fn mark_exhausted(&mut self) {
         self.exhausted = true;
     }
@@ -310,53 +304,53 @@ impl ExpressionIterator {
     }
 
     /// Generate all combinations of n-ary operations for small ranges
-    #[allow(clippy::only_used_in_recursion)]
     fn generate_nary_combinations_small(
         &self,
         expressions: &mut Vec<Expression>,
         all_operands: &[Vec<Expression>],
-        depth: usize,
-        current_combo: Vec<Expression>,
+        _depth: usize,
+        _current_combo: Vec<Expression>,
     ) {
-        if depth == all_operands.len() {
-            if current_combo.len() >= 2 {
-                if let Some(first) = current_combo.first() {
-                    // N-ary addition
-                    let mut result = first.clone();
-                    for operand in current_combo.iter().skip(1) {
-                        result = Expression::Add(Box::new(result), Box::new(operand.clone()));
-                    }
-                    expressions.push(result);
+        // Convert recursive approach to iterative using a stack
+        let mut stack: Vec<(usize, Vec<Expression>)> = Vec::new();
+        stack.push((0, Vec::new())); // (depth, current_combo)
 
-                    // N-ary multiplication
-                    let mut result = first.clone();
-                    for operand in current_combo.iter().skip(1) {
-                        result = Expression::Mul(Box::new(result), Box::new(operand.clone()));
-                    }
-                    expressions.push(result);
+        while let Some((depth, current_combo)) = stack.pop() {
+            if depth == all_operands.len() {
+                if current_combo.len() >= 2 {
+                    if let Some(first) = current_combo.first() {
+                        // N-ary addition
+                        let mut result = first.clone();
+                        for operand in current_combo.iter().skip(1) {
+                            result = Expression::Add(Box::new(result), Box::new(operand.clone()));
+                        }
+                        expressions.push(result);
 
-                    // N-ary subtraction
-                    let mut result = first.clone();
-                    for operand in current_combo.iter().skip(1) {
-                        result = Expression::Sub(Box::new(result), Box::new(operand.clone()));
+                        // N-ary multiplication
+                        let mut result = first.clone();
+                        for operand in current_combo.iter().skip(1) {
+                            result = Expression::Mul(Box::new(result), Box::new(operand.clone()));
+                        }
+                        expressions.push(result);
+
+                        // N-ary subtraction
+                        let mut result = first.clone();
+                        for operand in current_combo.iter().skip(1) {
+                            result = Expression::Sub(Box::new(result), Box::new(operand.clone()));
+                        }
+                        expressions.push(result);
                     }
-                    expressions.push(result);
                 }
+                continue;
             }
-            return;
-        }
 
-        // Try each expression at this depth level
-        if let Some(operands_at_depth) = all_operands.get(depth) {
-            for expr in operands_at_depth {
-                let mut new_combo = current_combo.clone();
-                new_combo.push(expr.clone());
-                self.generate_nary_combinations_small(
-                    expressions,
-                    all_operands,
-                    depth + 1,
-                    new_combo,
-                );
+            // Try each expression at this depth level
+            if let Some(operands_at_depth) = all_operands.get(depth) {
+                for expr in operands_at_depth {
+                    let mut new_combo = current_combo.clone();
+                    new_combo.push(expr.clone());
+                    stack.push((depth + 1, new_combo));
+                }
             }
         }
     }
