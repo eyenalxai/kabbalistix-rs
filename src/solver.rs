@@ -1,5 +1,6 @@
 use crate::expression::{Expression, ExpressionError};
 use crate::utils::{UtilsError, digits_to_number, generate_partitions};
+use dashmap::DashMap;
 use log::{debug, info};
 use rayon::prelude::*;
 use std::sync::{
@@ -22,12 +23,17 @@ const MAX_ROOT_DEGREE: f64 = 10.0;
 const EPSILON: f64 = 1e-9;
 
 /// Main solver for finding expressions that match a target value
-pub struct ExpressionSolver;
+pub struct ExpressionSolver {
+    // Memoization cache: (start, end) -> all expressions generated for that slice
+    cache: DashMap<(usize, usize), Arc<Vec<Expression>>>,
+}
 
 impl ExpressionSolver {
     /// Create a new expression solver
     pub fn new() -> Self {
-        Self
+        Self {
+            cache: DashMap::new(),
+        }
     }
 
     /// Find an expression from the given digits that evaluates to the target
@@ -42,7 +48,7 @@ impl ExpressionSolver {
         let valid_count = Arc::new(AtomicUsize::new(0));
 
         // Use parallel iterator to find matching expression
-        let result = all_expressions.into_par_iter().find_map_any(|expr| {
+        let result = all_expressions.par_iter().find_map_any(|expr| {
             // Update evaluated count
             evaluated_count.fetch_add(1, Ordering::Relaxed);
 
@@ -52,7 +58,7 @@ impl ExpressionSolver {
 
                 debug!("Expression {} evaluates to {}", expr, value);
                 if (value - target).abs() < EPSILON {
-                    return Some(expr);
+                    return Some(expr.clone());
                 }
             } else {
                 debug!("Expression {} failed to evaluate", expr);
@@ -88,13 +94,18 @@ impl ExpressionSolver {
         digits: &str,
         start: usize,
         end: usize,
-    ) -> Vec<Expression> {
+    ) -> Arc<Vec<Expression>> {
         if start >= end || start >= digits.len() || end > digits.len() {
-            return Vec::new();
+            return Arc::new(Vec::new());
+        }
+
+        // Check memoization cache first
+        if let Some(found) = self.cache.get(&(start, end)) {
+            return Arc::clone(&found);
         }
 
         let length = end - start;
-        let mut expressions = Vec::new();
+        let mut expressions: Vec<Expression> = Vec::new();
 
         // Base case: single number (always include this)
         if let Ok(num) = digits_to_number(digits, start, end) {
@@ -107,7 +118,10 @@ impl ExpressionSolver {
             self.add_negation_operations(&mut expressions);
         }
 
-        expressions
+        let arc_vec = Arc::new(expressions);
+        // Insert into cache for future reuse
+        let _ = self.cache.insert((start, end), Arc::clone(&arc_vec));
+        arc_vec
     }
 
     /// Add binary operations (add, sub, mul, div, pow) to expressions
@@ -225,15 +239,20 @@ impl ExpressionSolver {
 
     /// Add unary negation operations to expressions
     fn add_negation_operations(&self, expressions: &mut Vec<Expression>) {
-        // Unary negation (only for composite expressions to avoid redundancy)
+        // Unary negation (only for composite expressions and avoid double negatives)
         let composite_expressions: Vec<_> = expressions.iter().skip(1).cloned().collect();
         for expr in composite_expressions {
-            expressions.push(Expression::Neg(Box::new(expr)));
+            match expr {
+                Expression::Neg(_) => {
+                    // Skip generating -(-x)
+                }
+                _ => expressions.push(Expression::Neg(Box::new(expr))),
+            }
         }
     }
 
     /// Generate all possible expressions from a digit string
-    fn generate_expressions(&self, digits: &str, start: usize, end: usize) -> Vec<Expression> {
+    fn generate_expressions(&self, digits: &str, start: usize, end: usize) -> Arc<Vec<Expression>> {
         self.generate_expressions_recursive(digits, start, end)
     }
 }
