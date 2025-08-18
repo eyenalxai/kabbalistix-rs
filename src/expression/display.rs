@@ -15,6 +15,16 @@ impl fmt::Display for Expression {
             }
         }
 
+        fn is_literal_zero(expr: &Expression) -> bool {
+            match expr {
+                Expression::Number(n) => *n == 0.0,
+                Expression::Neg(inner) => {
+                    matches!(inner.as_ref(), Expression::Number(n) if *n == 0.0)
+                }
+                _ => false,
+            }
+        }
+
         fn leading_is_unary_minus(expr: &Expression) -> bool {
             match expr {
                 Expression::Neg(_) => true,
@@ -102,10 +112,17 @@ impl fmt::Display for Expression {
                     // Elide identity element 1: 1 * x => x, x * 1 => x
                     if let Expression::Number(n) = l.as_ref() {
                         if *n == 1.0 {
-                            return fmt_expression(f, r);
+                            // Keep the '1 *' if the other operand is a literal zero
+                            if !is_literal_zero(r) {
+                                return fmt_expression(f, r);
+                            }
                         }
                         // Prefer unary minus form for -1 * x => -x
                         if *n == -1.0 {
+                            // For -1 * 0, render just 0 (omit the negative sign on zero)
+                            if is_literal_zero(r) {
+                                return fmt_expression(f, r);
+                            }
                             let need = !matches!(r.as_ref(), Expression::Number(_));
                             write!(f, "-")?;
                             return write_with_parens(f, r, need);
@@ -113,10 +130,17 @@ impl fmt::Display for Expression {
                     }
                     if let Expression::Number(n) = r.as_ref() {
                         if *n == 1.0 {
-                            return fmt_expression(f, l);
+                            // Keep the '* 1' if the other operand is a literal zero
+                            if !is_literal_zero(l) {
+                                return fmt_expression(f, l);
+                            }
                         }
                         // Prefer unary minus form for x * -1 => -x
                         if *n == -1.0 {
+                            // For 0 * -1, render just 0 (omit the negative sign on zero)
+                            if is_literal_zero(l) {
+                                return fmt_expression(f, l);
+                            }
                             let need = !matches!(l.as_ref(), Expression::Number(_));
                             write!(f, "-")?;
                             return write_with_parens(f, l, need);
@@ -154,6 +178,12 @@ impl fmt::Display for Expression {
                     write_with_parens(f, r, need_r)
                 }
                 Expression::Neg(e) => {
+                    // Normalize -0 to 0
+                    if let Expression::Number(n) = e.as_ref()
+                        && *n == 0.0
+                    {
+                        return write!(f, "0");
+                    }
                     // Simplify --x to x
                     if let Expression::Neg(inner) = e.as_ref() {
                         fmt_expression(f, inner)

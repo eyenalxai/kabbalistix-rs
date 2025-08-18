@@ -74,7 +74,10 @@ fn run() -> Result<()> {
         Some(expr) => {
             // Append evaluated result for clarity
             match expr.evaluate() {
-                Ok(value) => println!("{} = {}", expr, value),
+                Ok(value) => {
+                    let display_value = if value == 0.0 { 0.0 } else { value };
+                    println!("{} = {}", expr, display_value)
+                }
                 Err(_) => println!("{}", expr),
             }
             Ok(())
