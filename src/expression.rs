@@ -1,6 +1,6 @@
+use log::debug;
 use std::fmt;
 use thiserror::Error;
-use log::{debug, warn};
 
 /// Errors that can occur during expression evaluation
 #[derive(Error, Debug, Clone, PartialEq)]
@@ -47,7 +47,7 @@ impl Expression {
     /// Evaluates the expression and returns the result
     pub fn evaluate(&self) -> Result<f64, ExpressionError> {
         debug!("Evaluating expression: {}", self);
-        
+
         let result = match self {
             Expression::Number(n) => Ok(*n),
             Expression::Add(l, r) => {
@@ -69,7 +69,7 @@ impl Expression {
                 let left = l.evaluate()?;
                 let right = r.evaluate()?;
                 if right == 0.0 {
-                    warn!("Division by zero attempted");
+                    debug!("Division by zero attempted");
                     Err(ExpressionError::DivisionByZero)
                 } else {
                     Ok(left / right)
@@ -79,7 +79,10 @@ impl Expression {
                 let left = l.evaluate()?;
                 let right = r.evaluate()?;
                 if left < 0.0 && right.fract() != 0.0 {
-                    warn!("Complex result from negative base with fractional exponent: {}^{}", left, right);
+                    debug!(
+                        "Complex result from negative base with fractional exponent: {}^{}",
+                        left, right
+                    );
                     Err(ExpressionError::ComplexResult)
                 } else {
                     Ok(left.powf(right))
@@ -93,26 +96,32 @@ impl Expression {
                 let n_val = n.evaluate()?;
                 let a_val = a.evaluate()?;
                 if n_val < 2.0 || n_val.fract() != 0.0 {
-                    warn!("Invalid root index: {}", n_val);
+                    debug!("Invalid root index: {}", n_val);
                     Err(ExpressionError::InvalidRootIndex)
                 } else if a_val < 0.0 && (n_val as i32) % 2 == 0 {
-                    warn!("Even root of negative number: {}th root of {}", n_val, a_val);
+                    debug!(
+                        "Even root of negative number: {}th root of {}",
+                        n_val, a_val
+                    );
                     Err(ExpressionError::EvenRootOfNegative)
                 } else if a_val < 0.0 && (n_val as i32) % 2 == 1 {
                     // Odd root of negative number: compute as -((-a)^(1/n))
-                    debug!("Computing odd root of negative: {}th root of {}", n_val, a_val);
+                    debug!(
+                        "Computing odd root of negative: {}th root of {}",
+                        n_val, a_val
+                    );
                     Ok(-((-a_val).powf(1.0 / n_val)))
                 } else {
                     Ok(a_val.powf(1.0 / n_val))
                 }
             }
         };
-        
+
         match &result {
             Ok(value) => debug!("Expression evaluated to: {}", value),
             Err(e) => debug!("Expression evaluation failed: {}", e),
         }
-        
+
         result
     }
 }
