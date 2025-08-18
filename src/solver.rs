@@ -574,6 +574,30 @@ impl ExpressionSolver {
         Self {}
     }
 
+    /// Count the number of digits used in an expression
+    #[allow(clippy::only_used_in_recursion)]
+    fn count_digits_used(&self, expr: &Expression) -> usize {
+        match expr {
+            Expression::Number(n) => {
+                // Count digits in the number
+                if *n == 0.0 {
+                    1
+                } else {
+                    n.abs().floor().to_string().len()
+                }
+            }
+            Expression::Add(left, right)
+            | Expression::Sub(left, right)
+            | Expression::Mul(left, right)
+            | Expression::Div(left, right)
+            | Expression::Pow(left, right)
+            | Expression::NthRoot(left, right) => {
+                self.count_digits_used(left) + self.count_digits_used(right)
+            }
+            Expression::Neg(inner) => self.count_digits_used(inner),
+        }
+    }
+
     /// Find an expression from the given digits that evaluates to the target
     pub fn find_expression(&self, digits: &str, target: f64) -> Option<Expression> {
         info!("Starting iterative expression generation and evaluation");
@@ -584,6 +608,7 @@ impl ExpressionSolver {
         let mut closest_distance = f64::INFINITY;
         let mut closest_expression: Option<Expression> = None;
         let mut closest_value = 0.0;
+        let required_digit_count = digits.len();
 
         // Process expressions one at a time
         for expr in iterator {
@@ -597,6 +622,16 @@ impl ExpressionSolver {
                 total_valid += 1;
                 debug!("Expression {} evaluates to {}", expr, value);
 
+                // Check if this expression uses all digits
+                let digits_used = self.count_digits_used(&expr);
+                if digits_used != required_digit_count {
+                    debug!(
+                        "Expression {} uses {} digits, but {} required",
+                        expr, digits_used, required_digit_count
+                    );
+                    continue;
+                }
+
                 // Check if this is an exact match
                 if (value - target).abs() < EPSILON {
                     info!(
@@ -606,7 +641,7 @@ impl ExpressionSolver {
                     return Some(expr);
                 }
 
-                // Track the closest result
+                // Track the closest result (only for expressions using all digits)
                 let distance = (value - target).abs();
                 if distance < closest_distance {
                     closest_distance = distance;
@@ -771,5 +806,52 @@ mod tests {
             let expr_str = format!("{}", expr);
             println!("Found expression for 222->6: {}", expr_str);
         }
+    }
+
+    #[test]
+    fn test_all_digits_must_be_used() {
+        // Test that the solver only returns expressions using ALL digits
+        let solver = ExpressionSolver::new();
+
+        // Test with "1111" -> 4: should use all four 1's
+        let result = solver.find_expression("1111", 4.0);
+        assert!(result.is_some(), "Should find an expression that equals 4");
+
+        if let Some(expr) = result {
+            // Count digits in the expression
+            let digit_count = solver.count_digits_used(&expr);
+            assert_eq!(
+                digit_count, 4,
+                "Expression should use all 4 digits, but used {}: {}",
+                digit_count, expr
+            );
+
+            // Verify it evaluates correctly
+            assert!(
+                expr.evaluate().is_ok(),
+                "Expression should evaluate successfully"
+            );
+            if let Ok(value) = expr.evaluate() {
+                assert!((value - 4.0).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn test_digit_counting() {
+        let solver = ExpressionSolver::new();
+
+        // Test digit counting for various expressions
+        let expr1 = Expression::Number(123.0);
+        assert_eq!(solver.count_digits_used(&expr1), 3);
+
+        let expr2 = Expression::Add(
+            Box::new(Expression::Number(12.0)),
+            Box::new(Expression::Number(3.0)),
+        );
+        assert_eq!(solver.count_digits_used(&expr2), 3); // 12 (2 digits) + 3 (1 digit)
+
+        let expr3 = Expression::Number(0.0);
+        assert_eq!(solver.count_digits_used(&expr3), 1); // 0 counts as 1 digit
     }
 }
