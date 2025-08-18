@@ -15,13 +15,15 @@ impl ExpressionGenerator {
     }
 
     pub fn generate_nth_root(n: &Expression, a: &Expression) -> Option<Expression> {
-        if let Expression::Number(n_val) = n {
-            if *n_val >= 2.0 && n_val.fract() == 0.0 && *n_val <= MAX_ROOT_DEGREE {
-                return Some(Expression::NthRoot(
-                    Box::new(n.clone()),
-                    Box::new(a.clone()),
-                ));
-            }
+        if let Expression::Number(n_val) = n
+            && *n_val >= 2.0
+            && n_val.fract() == 0.0
+            && *n_val <= MAX_ROOT_DEGREE
+        {
+            return Some(Expression::NthRoot(
+                Box::new(n.clone()),
+                Box::new(a.clone()),
+            ));
         }
         None
     }

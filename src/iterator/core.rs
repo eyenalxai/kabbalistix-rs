@@ -88,11 +88,12 @@ impl ExpressionIterator {
         }
 
         // For larger ranges, generate base number only
-        if state.complexity == 1 && state.position == 0 {
-            if let Ok(num) = digits_to_number(&self.digits, start, end) {
-                state.advance();
-                return Some(Expression::Number(num));
-            }
+        if state.complexity == 1
+            && state.position == 0
+            && let Ok(num) = digits_to_number(&self.digits, start, end)
+        {
+            state.advance();
+            return Some(Expression::Number(num));
         }
 
         state.mark_exhausted();

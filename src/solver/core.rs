@@ -26,11 +26,11 @@ impl ExpressionSolver {
         // Quick check: base number using all digits
         if let Ok(num) = digits_to_number(digits, 0, len) {
             let expr = Expression::Number(num);
-            if let Ok(value) = expr.evaluate() {
-                if (value - target).abs() < EPSILON {
-                    info!("Found exact match as base number: {}", expr);
-                    return Some(expr);
-                }
+            if let Ok(value) = expr.evaluate()
+                && (value - target).abs() < EPSILON
+            {
+                info!("Found exact match as base number: {}", expr);
+                return Some(expr);
             }
         }
 
@@ -114,10 +114,10 @@ impl ExpressionSolver {
         mut on_expr: impl FnMut(Expression) -> Option<Expression>,
     ) -> Option<Expression> {
         // Base number for the range
-        if let Ok(num) = digits_to_number(digits, start, end) {
-            if let Some(found) = on_expr(Expression::Number(num)) {
-                return Some(found);
-            }
+        if let Ok(num) = digits_to_number(digits, start, end)
+            && let Some(found) = on_expr(Expression::Number(num))
+        {
+            return Some(found);
         }
 
         let length = end - start;
@@ -233,10 +233,10 @@ impl ExpressionSolver {
                         ops.push(root);
                     }
                     for expr in ops {
-                        if let Ok(value) = expr.evaluate() {
-                            if (value - target).abs() < EPSILON {
-                                return Some(expr);
-                            }
+                        if let Ok(value) = expr.evaluate()
+                            && (value - target).abs() < EPSILON
+                        {
+                            return Some(expr);
                         }
                     }
                     None
@@ -262,10 +262,10 @@ impl ExpressionSolver {
         self.enumerate_nary_operands(digits, partition, 0, &mut current, |ops_vec| {
             let ops = ExpressionGenerator::generate_nary_ops(ops_vec);
             for expr in ops {
-                if let Ok(value) = expr.evaluate() {
-                    if (value - target).abs() < EPSILON {
-                        return Some(expr);
-                    }
+                if let Ok(value) = expr.evaluate()
+                    && (value - target).abs() < EPSILON
+                {
+                    return Some(expr);
                 }
             }
             None
