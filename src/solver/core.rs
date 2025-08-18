@@ -132,13 +132,13 @@ impl ExpressionSolver {
                         {
                             // Enumerate left then right expressions, combine via binary ops
                             let mut found: Option<Expression> = None;
-                            if let Some(_found_inner) =
-                                self.enumerate_expressions_for_range(digits, s1, e1, |left| {
-                                    if let Some(found_inner) = self.enumerate_expressions_for_range(
-                                        digits,
-                                        s2,
-                                        e2,
-                                        |right| {
+                            if let Some(_found_inner) = become self.enumerate_expressions_for_range(
+                                digits,
+                                s1,
+                                e1,
+                                |left| {
+                                    if let Some(found_inner) = become self
+                                        .enumerate_expressions_for_range(digits, s2, e2, |right| {
                                             let mut ops = ExpressionGenerator::generate_binary_ops(
                                                 &left, &right,
                                             );
@@ -155,13 +155,13 @@ impl ExpressionSolver {
                                                 }
                                             }
                                             None
-                                        },
-                                    ) {
+                                        })
+                                    {
                                         found = Some(found_inner);
                                     }
                                     None
-                                })
-                            {
+                                },
+                            ) {
                                 return found;
                             }
                             if found.is_some() {
