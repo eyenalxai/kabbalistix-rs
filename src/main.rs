@@ -77,6 +77,9 @@ impl Expression {
                     Err("Root index must be an integer >= 2".to_string())
                 } else if a_val < 0.0 && (n_val as i32) % 2 == 0 {
                     Err("Even root of negative number".to_string())
+                } else if a_val < 0.0 && (n_val as i32) % 2 == 1 {
+                    // Odd root of negative number: compute as -((-a)^(1/n))
+                    Ok(-((-a_val).powf(1.0 / n_val)))
                 } else {
                     Ok(a_val.powf(1.0 / n_val))
                 }
@@ -272,4 +275,150 @@ fn find_expression(digits: &str, target: f64) -> Option<Expression> {
         evaluated_count, valid_count
     );
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nth_root_cube_root() {
+        // Test cube root: 3rd root of 27 = 3
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(3.0)),
+            Box::new(Expression::Number(27.0)),
+        );
+        let result = expr.evaluate().unwrap();
+        assert!((result - 3.0).abs() < 1e-9, "Expected 3.0, got {}", result);
+    }
+
+    #[test]
+    fn test_nth_root_square_root() {
+        // Test square root: 2nd root of 100 = 10
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(2.0)),
+            Box::new(Expression::Number(100.0)),
+        );
+        let result = expr.evaluate().unwrap();
+        assert!(
+            (result - 10.0).abs() < 1e-9,
+            "Expected 10.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_nth_root_fourth_root() {
+        // Test 4th root: 4th root of 81 = 3
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(4.0)),
+            Box::new(Expression::Number(81.0)),
+        );
+        let result = expr.evaluate().unwrap();
+        assert!((result - 3.0).abs() < 1e-9, "Expected 3.0, got {}", result);
+    }
+
+    #[test]
+    fn test_nth_root_square_root_of_49() {
+        // Test square root: 2nd root of 49 = 7
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(2.0)),
+            Box::new(Expression::Number(49.0)),
+        );
+        let result = expr.evaluate().unwrap();
+        assert!((result - 7.0).abs() < 1e-9, "Expected 7.0, got {}", result);
+    }
+
+    #[test]
+    fn test_nth_root_invalid_root_index_fractional() {
+        // Test error: fractional root index
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(2.5)),
+            Box::new(Expression::Number(16.0)),
+        );
+        let result = expr.evaluate();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Root index must be an integer >= 2");
+    }
+
+    #[test]
+    fn test_nth_root_invalid_root_index_too_small() {
+        // Test error: root index < 2
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(1.0)),
+            Box::new(Expression::Number(16.0)),
+        );
+        let result = expr.evaluate();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Root index must be an integer >= 2");
+    }
+
+    #[test]
+    fn test_nth_root_even_root_of_negative() {
+        // Test error: even root of negative number
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(2.0)),
+            Box::new(Expression::Number(-16.0)),
+        );
+        let result = expr.evaluate();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Even root of negative number");
+    }
+
+    #[test]
+    fn test_nth_root_odd_root_of_negative() {
+        // Test odd root of negative number (should work)
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(3.0)),
+            Box::new(Expression::Number(-27.0)),
+        );
+        let result = expr.evaluate().unwrap();
+        assert!(
+            (result - (-3.0)).abs() < 1e-9,
+            "Expected -3.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_nth_root_fifth_root() {
+        // Test 5th root: 5th root of 32 = 2
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(5.0)),
+            Box::new(Expression::Number(32.0)),
+        );
+        let result = expr.evaluate().unwrap();
+        assert!((result - 2.0).abs() < 1e-9, "Expected 2.0, got {}", result);
+    }
+
+    #[test]
+    fn test_expression_display_nth_root() {
+        // Test the display formatting for nth root
+        let expr = Expression::NthRoot(
+            Box::new(Expression::Number(3.0)),
+            Box::new(Expression::Number(27.0)),
+        );
+        let display = format!("{}", expr);
+        assert_eq!(display, "√3(27)");
+    }
+
+    #[test]
+    fn test_find_expression_with_nth_root() {
+        // Test that find_expression can find nth root solutions
+        // Using digits "327" to find target 3 (cube root of 27 = 3)
+        let result = find_expression("327", 3.0);
+        assert!(result.is_some());
+
+        let expr = result.unwrap();
+        let value = expr.evaluate().unwrap();
+        assert!((value - 3.0).abs() < 1e-9);
+
+        // Check that it's actually using nth root (not just arithmetic)
+        let expr_str = format!("{}", expr);
+        assert!(
+            expr_str.contains("√3(27)"),
+            "Expected nth root expression, got: {}",
+            expr_str
+        );
+    }
 }
