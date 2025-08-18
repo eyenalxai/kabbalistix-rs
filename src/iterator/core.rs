@@ -9,6 +9,20 @@ use super::state::ExpressionIteratorState;
 use super::types::{GenerationState, WorkItem};
 
 #[derive(Debug, Clone)]
+struct BinaryOpState {
+    start: usize,
+    end: usize,
+    is_full_range: bool,
+    partition_idx: usize,
+    left_range: (usize, usize),
+    right_range: (usize, usize),
+    left_iterator_state: ExpressionIteratorState,
+    right_iterator_state: Option<ExpressionIteratorState>,
+    current_left: Option<Expression>,
+    op_idx: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct ExpressionIterator {
     work_queue: VecDeque<WorkItem>,
     digits: String,
@@ -450,9 +464,9 @@ impl Iterator for ExpressionIterator {
                     current_left,
                     op_idx,
                 } => {
-                    if let Some(result) = self.handle_binary_ops(
-                        item_start,
-                        item_end,
+                    let s = BinaryOpState {
+                        start: item_start,
+                        end: item_end,
                         is_full_range,
                         partition_idx,
                         left_range,
@@ -461,7 +475,8 @@ impl Iterator for ExpressionIterator {
                         right_iterator_state,
                         current_left,
                         op_idx,
-                    ) {
+                    };
+                    if let Some(result) = self.handle_binary_ops(s) {
                         return Some(result);
                     }
                 }
@@ -498,83 +513,61 @@ impl Iterator for ExpressionIterator {
 
 impl ExpressionIterator {
     /// Simplified binary operations handler that doesn't need to move WorkItem
-    fn handle_binary_ops(
-        &mut self,
-        start: usize,
-        end: usize,
-        is_full_range: bool,
-        partition_idx: usize,
-        left_range: (usize, usize),
-        right_range: (usize, usize),
-        mut left_iterator_state: ExpressionIteratorState,
-        mut right_iterator_state: Option<ExpressionIteratorState>,
-        mut current_left: Option<Expression>,
-        op_idx: usize,
-    ) -> Option<Expression> {
+    fn handle_binary_ops(&mut self, mut s: BinaryOpState) -> Option<Expression> {
         // Get current left expression if we don't have one
-        if current_left.is_none() {
-            current_left = self.generate_next_expression(left_range, &mut left_iterator_state);
-            current_left.as_ref()?; // Return None if left iterator exhausted
-            right_iterator_state = Some(ExpressionIteratorState::new());
+        if s.current_left.is_none() {
+            s.current_left =
+                self.generate_next_expression(s.left_range, &mut s.left_iterator_state);
+            s.current_left.as_ref()?; // Return None if left iterator exhausted
+            s.right_iterator_state = Some(ExpressionIteratorState::new());
         }
 
         // Get next right expression
-        if right_iterator_state.is_none() {
-            right_iterator_state = Some(ExpressionIteratorState::new());
+        if s.right_iterator_state.is_none() {
+            s.right_iterator_state = Some(ExpressionIteratorState::new());
         }
 
-        if let Some(ref mut right_state) = right_iterator_state {
-            if let Some(right) = self.generate_next_expression(right_range, right_state) {
-                if let Some(ref left) = current_left {
-                    let expr = self.create_binary_expression(left, &right, op_idx)?;
+        if let Some(ref mut right_state) = s.right_iterator_state {
+            if let Some(right) = self.generate_next_expression(s.right_range, right_state) {
+                if let Some(ref left) = s.current_left {
+                    let expr = self.create_binary_expression(left, &right, s.op_idx)?;
 
                     // Queue next iteration
-                    let right_state_exhausted = right_state.exhausted;
-                    self.queue_next_binary_iteration(
-                        start,
-                        end,
-                        partition_idx,
-                        left_range,
-                        right_range,
-                        left_iterator_state,
-                        right_iterator_state.clone(),
-                        current_left.clone(),
-                        op_idx,
-                        right_state_exhausted,
-                    );
+                    let is_full = s.is_full_range;
+                    self.queue_next_binary_iteration(s);
 
                     // Only return expressions that use all digits
-                    if is_full_range {
+                    if is_full {
                         return Some(expr);
                     }
                 }
             } else {
                 // Right iterator exhausted for current operation
-                if op_idx < 5 {
+                if s.op_idx < 5 {
                     // Try next operation with same left expression
                     self.try_add_work_item(WorkItem {
-                        start,
-                        end,
+                        start: s.start,
+                        end: s.end,
                         state: GenerationState::BinaryOps {
-                            partition_idx,
-                            left_range,
-                            right_range,
-                            left_iterator_state,
+                            partition_idx: s.partition_idx,
+                            left_range: s.left_range,
+                            right_range: s.right_range,
+                            left_iterator_state: s.left_iterator_state,
                             right_iterator_state: Some(ExpressionIteratorState::new()),
-                            current_left,
-                            op_idx: op_idx + 1,
+                            current_left: s.current_left,
+                            op_idx: s.op_idx + 1,
                         },
                     });
                 } else {
                     // All operations exhausted for current left, get next left
                     self.try_add_work_item(WorkItem {
-                        start,
-                        end,
+                        start: s.start,
+                        end: s.end,
                         state: GenerationState::BinaryOps {
-                            partition_idx,
-                            left_range,
-                            right_range,
-                            left_iterator_state,
+                            partition_idx: s.partition_idx,
+                            left_range: s.left_range,
+                            right_range: s.right_range,
+                            left_iterator_state: s.left_iterator_state,
                             right_iterator_state: None,
                             current_left: None,
                             op_idx: 0,
@@ -587,31 +580,19 @@ impl ExpressionIterator {
     }
 
     /// Simplified queue next binary operation iteration
-    fn queue_next_binary_iteration(
-        &mut self,
-        start: usize,
-        end: usize,
-        partition_idx: usize,
-        left_range: (usize, usize),
-        right_range: (usize, usize),
-        left_iterator_state: ExpressionIteratorState,
-        right_iterator_state: Option<ExpressionIteratorState>,
-        current_left: Option<Expression>,
-        op_idx: usize,
-        _right_state_exhausted: bool,
-    ) {
+    fn queue_next_binary_iteration(&mut self, s: BinaryOpState) {
         // Continue with same operation and advance right iterator
         self.try_add_work_item(WorkItem {
-            start,
-            end,
+            start: s.start,
+            end: s.end,
             state: GenerationState::BinaryOps {
-                partition_idx,
-                left_range,
-                right_range,
-                left_iterator_state,
-                right_iterator_state,
-                current_left,
-                op_idx,
+                partition_idx: s.partition_idx,
+                left_range: s.left_range,
+                right_range: s.right_range,
+                left_iterator_state: s.left_iterator_state,
+                right_iterator_state: s.right_iterator_state,
+                current_left: s.current_left,
+                op_idx: s.op_idx,
             },
         });
     }
