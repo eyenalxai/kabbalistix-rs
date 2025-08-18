@@ -1,8 +1,32 @@
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unwrap_or_default,
+    clippy::get_unwrap,
+    clippy::map_unwrap_or,
+    clippy::unnecessary_unwrap,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::todo,
+    clippy::unimplemented,
+    clippy::unreachable,
+    clippy::exit,
+    clippy::mem_forget,
+    clippy::clone_on_ref_ptr,
+    clippy::mutex_atomic,
+    clippy::rc_mutex
+)]
+
 use crate::expression::{Expression, ExpressionError};
 use crate::utils::{UtilsError, digits_to_number, generate_partitions};
 use log::{debug, info};
 use rayon::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use thiserror::Error;
 
 /// Errors that can occur during solving
@@ -34,24 +58,18 @@ impl ExpressionSolver {
 
         debug!("Generated {} expressions to evaluate", total_expressions);
 
-        // Use Arc<Mutex<_>> to track counts across threads
-        let evaluated_count = Arc::new(Mutex::new(0usize));
-        let valid_count = Arc::new(Mutex::new(0usize));
+        // Use Arc<AtomicUsize> to track counts across threads
+        let evaluated_count = Arc::new(AtomicUsize::new(0));
+        let valid_count = Arc::new(AtomicUsize::new(0));
 
         // Use parallel iterator to find matching expression
         let result = all_expressions.into_par_iter().find_map_any(|expr| {
             // Update evaluated count
-            {
-                let mut count = evaluated_count.lock().ok()?;
-                *count += 1;
-            }
+            evaluated_count.fetch_add(1, Ordering::Relaxed);
 
             if let Ok(value) = expr.evaluate() {
                 // Update valid count
-                {
-                    let mut count = valid_count.lock().ok()?;
-                    *count += 1;
-                }
+                valid_count.fetch_add(1, Ordering::Relaxed);
 
                 debug!("Expression {} evaluates to {}", expr, value);
                 if (value - target).abs() < EPSILON {
@@ -64,8 +82,8 @@ impl ExpressionSolver {
         });
 
         // Get final counts for logging
-        let final_evaluated = evaluated_count.lock().map(|c| *c).unwrap_or(0);
-        let final_valid = valid_count.lock().map(|c| *c).unwrap_or(0);
+        let final_evaluated = evaluated_count.load(Ordering::Relaxed);
+        let final_valid = valid_count.load(Ordering::Relaxed);
 
         match result {
             Some(expr) => {

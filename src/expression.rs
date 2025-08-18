@@ -1,3 +1,24 @@
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unwrap_or_default,
+    clippy::get_unwrap,
+    clippy::map_unwrap_or,
+    clippy::unnecessary_unwrap,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::todo,
+    clippy::unimplemented,
+    clippy::unreachable,
+    clippy::exit,
+    clippy::mem_forget,
+    clippy::clone_on_ref_ptr,
+    clippy::mutex_atomic,
+    clippy::rc_mutex
+)]
+
 use log::debug;
 use std::fmt;
 use thiserror::Error;
@@ -45,6 +66,14 @@ impl fmt::Display for Expression {
 
 impl Expression {
     /// Evaluates the expression and returns the result
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * Division by zero is attempted
+    /// * A negative base is raised to a fractional exponent (would result in complex number)
+    /// * An invalid root index is used (< 2 or fractional)
+    /// * An even root of a negative number is attempted
     pub fn evaluate(&self) -> Result<f64, ExpressionError> {
         debug!("Evaluating expression: {}", self);
 

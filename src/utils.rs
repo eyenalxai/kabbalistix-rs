@@ -1,3 +1,24 @@
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unwrap_or_default,
+    clippy::get_unwrap,
+    clippy::map_unwrap_or,
+    clippy::unnecessary_unwrap,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::todo,
+    clippy::unimplemented,
+    clippy::unreachable,
+    clippy::exit,
+    clippy::mem_forget,
+    clippy::clone_on_ref_ptr,
+    clippy::mutex_atomic,
+    clippy::rc_mutex
+)]
+
 use log::{debug, warn};
 use thiserror::Error;
 
@@ -46,6 +67,12 @@ pub fn generate_partitions(
 }
 
 /// Convert a digit range to a number
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// * The range is invalid (start >= end, or out of bounds)
+/// * The digit slice cannot be parsed as a valid number
 pub fn digits_to_number(digits: &str, start: usize, end: usize) -> Result<f64, UtilsError> {
     debug!("Converting digits[{}..{}] from '{}'", start, end, digits);
 
@@ -69,12 +96,20 @@ pub fn digits_to_number(digits: &str, start: usize, end: usize) -> Result<f64, U
         length: digits.len(),
     })?;
 
-    let result = slice.parse::<f64>().unwrap_or(0.0);
+    let result = slice
+        .parse::<f64>()
+        .map_err(|_| UtilsError::InvalidDigitString(slice.to_string()))?;
     debug!("Converted '{}' to {}", slice, result);
     Ok(result)
 }
 
 /// Validates that a string contains only ASCII digits
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// * The digit string is empty
+/// * The digit string contains non-ASCII-digit characters
 pub fn validate_digit_string(digit_string: &str) -> Result<(), UtilsError> {
     debug!("Validating digit string: '{}'", digit_string);
 
