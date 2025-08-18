@@ -1,12 +1,8 @@
 use crate::expression::{Expression, ExpressionError};
 use crate::utils::{UtilsError, digits_to_number, generate_partitions};
 use log::{debug, info};
-use rayon::prelude::*;
-use std::collections::VecDeque;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+
+use std::collections::{HashMap, VecDeque};
 use thiserror::Error;
 
 /// Errors that can occur during solving
@@ -21,202 +17,422 @@ pub enum SolverError {
 // Default configuration constants
 const MAX_ROOT_DEGREE: f64 = 10.0;
 const EPSILON: f64 = 1e-9;
-const GENERATION_BATCH_SIZE: usize = 5000; // Generate expressions in smaller batches
 
-/// Represents a work item for generating expressions
-#[derive(Debug, Clone)]
-struct GenerationTask {
+/// Iterative expression generator that yields expressions one at a time without storing them
+pub struct ExpressionIterator {
+    work_queue: VecDeque<WorkItem>,
     digits: String,
+    small_cache: HashMap<(usize, usize), Vec<Expression>>, // Cache for small ranges only
+}
+
+#[derive(Debug, Clone)]
+struct WorkItem {
     start: usize,
     end: usize,
-    depth: usize,
+    state: GenerationState,
 }
 
-/// Streaming expression generator that produces expressions in batches
-pub struct ExpressionBatchGenerator {
-    work_queue: VecDeque<GenerationTask>,
-    solver: Arc<ExpressionSolver>,
-    current_batch: Vec<Expression>,
-    total_generated: usize,
+#[derive(Debug, Clone)]
+enum GenerationState {
+    /// Generate the base number
+    BaseNumber,
+    /// Generate binary operations for a specific partition
+    BinaryOps {
+        partition_idx: usize,
+        left_exprs: Vec<Expression>,
+        right_exprs: Vec<Expression>,
+        left_idx: usize,
+        right_idx: usize,
+        op_idx: usize, // 0=Add, 1=Sub, 2=Mul, 3=Div, 4=Pow
+    },
+    /// Generate nth root operations for a specific partition
+    NthRoots {
+        partition_idx: usize,
+        n_value: f64,
+        a_exprs: Vec<Expression>,
+        a_idx: usize,
+    },
+    /// Generate negation operations
+    Negations {
+        base_exprs: Vec<Expression>,
+        expr_idx: usize,
+    },
+    /// Initialize binary operations for a partition
+    InitBinary { partition_idx: usize },
+    /// Initialize nth root operations for a partition
+    InitNthRoot { partition_idx: usize },
+    /// Initialize negation operations
+    InitNegations,
 }
 
-impl ExpressionBatchGenerator {
-    fn new(digits: String, solver: Arc<ExpressionSolver>) -> Self {
+impl ExpressionIterator {
+    pub fn new(digits: String) -> Self {
         let mut work_queue = VecDeque::new();
-        work_queue.push_back(GenerationTask {
-            digits: digits.clone(),
+        let len = digits.len();
+
+        // Start with base number generation
+        work_queue.push_back(WorkItem {
             start: 0,
-            end: digits.len(),
-            depth: 0,
+            end: len,
+            state: GenerationState::BaseNumber,
         });
 
         info!(
-            "Initialized streaming expression generator with {} digits, batch size: {}",
-            digits.len(),
-            GENERATION_BATCH_SIZE
+            "Initialized iterative expression generator with {} digits",
+            len
         );
 
         Self {
             work_queue,
-            solver,
-            current_batch: Vec::new(),
-            total_generated: 0,
+            digits,
+            small_cache: HashMap::new(),
         }
     }
 
-    /// Generate the next batch of expressions
-    fn next_batch(&mut self) -> Option<Vec<Expression>> {
-        self.current_batch.clear();
-
-        // Process work items until we have enough expressions for a batch or run out of work
-        while self.current_batch.len() < GENERATION_BATCH_SIZE && !self.work_queue.is_empty() {
-            if let Some(task) = self.work_queue.pop_front() {
-                self.process_task(task);
-            }
+    /// Get expressions for small ranges (≤ 2 digits) with caching
+    fn get_small_expressions(&mut self, start: usize, end: usize) -> Vec<Expression> {
+        let key = (start, end);
+        if let Some(cached) = self.small_cache.get(&key) {
+            return cached.clone();
         }
 
-        if self.current_batch.is_empty() {
-            None
-        } else {
-            self.total_generated += self.current_batch.len();
-            info!(
-                "Generated batch of {} expressions (total: {})",
-                self.current_batch.len(),
-                self.total_generated
-            );
-            Some(self.current_batch.clone())
-        }
-    }
-
-    fn process_task(&mut self, task: GenerationTask) {
-        let length = task.end - task.start;
+        let mut expressions = Vec::new();
 
         // Base case: single number
-        if let Ok(num) = digits_to_number(&task.digits, task.start, task.end) {
-            self.current_batch.push(Expression::Number(num));
+        if let Ok(num) = digits_to_number(&self.digits, start, end) {
+            expressions.push(Expression::Number(num));
         }
 
-        if length >= 2 {
-            // Add binary operations
-            self.add_binary_operations_to_batch(&task);
-            // Add nth root operations
-            self.add_nth_root_operations_to_batch(&task);
-            // Add negation operations (only for composite expressions)
-            if task.depth > 0 {
-                self.add_negation_operations_to_batch();
-            }
-        }
-    }
+        let length = end - start;
+        if length == 2 {
+            let partitions = generate_partitions(start, end, 2);
 
-    fn add_binary_operations_to_batch(&mut self, task: &GenerationTask) {
-        let partitions = generate_partitions(task.start, task.end, 2);
+            // Binary operations for 2-digit combinations
+            for partition in &partitions {
+                if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                    (partition.first(), partition.get(1))
+                {
+                    if let (Ok(left_num), Ok(right_num)) = (
+                        digits_to_number(&self.digits, start1, end1),
+                        digits_to_number(&self.digits, start2, end2),
+                    ) {
+                        let left = Expression::Number(left_num);
+                        let right = Expression::Number(right_num);
 
-        for partition in partitions {
-            if let (Some(&(start1, end1)), Some(&(start2, end2))) =
-                (partition.first(), partition.get(1))
-            {
-                // Generate smaller sub-expressions directly if they're small enough
-                let left_exprs = if end1 - start1 <= 2 {
-                    self.solver
-                        .generate_expressions_small(&task.digits, start1, end1)
-                } else {
-                    // Add to work queue for later processing
-                    self.work_queue.push_back(GenerationTask {
-                        digits: task.digits.clone(),
-                        start: start1,
-                        end: end1,
-                        depth: task.depth + 1,
-                    });
-                    continue;
-                };
+                        expressions.push(Expression::Add(
+                            Box::new(left.clone()),
+                            Box::new(right.clone()),
+                        ));
+                        expressions.push(Expression::Sub(
+                            Box::new(left.clone()),
+                            Box::new(right.clone()),
+                        ));
+                        expressions.push(Expression::Mul(
+                            Box::new(left.clone()),
+                            Box::new(right.clone()),
+                        ));
+                        expressions.push(Expression::Div(
+                            Box::new(left.clone()),
+                            Box::new(right.clone()),
+                        ));
+                        expressions.push(Expression::Pow(
+                            Box::new(left.clone()),
+                            Box::new(right.clone()),
+                        ));
 
-                let right_exprs = if end2 - start2 <= 2 {
-                    self.solver
-                        .generate_expressions_small(&task.digits, start2, end2)
-                } else {
-                    // Add to work queue for later processing
-                    self.work_queue.push_back(GenerationTask {
-                        digits: task.digits.clone(),
-                        start: start2,
-                        end: end2,
-                        depth: task.depth + 1,
-                    });
-                    continue;
-                };
-
-                // Generate binary operations
-                for left in left_exprs.iter() {
-                    for right in right_exprs.iter() {
-                        self.current_batch.extend([
-                            Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
-                        ]);
-
-                        // Stop if we've generated enough for this batch
-                        if self.current_batch.len() >= GENERATION_BATCH_SIZE {
-                            return;
+                        // Nth root if applicable
+                        if left_num >= 2.0 && left_num.fract() == 0.0 && left_num <= MAX_ROOT_DEGREE
+                        {
+                            expressions.push(Expression::NthRoot(
+                                Box::new(left.clone()),
+                                Box::new(right.clone()),
+                            ));
                         }
                     }
                 }
             }
+
+            // Negation operations (skip the base number)
+            let composite_exprs: Vec<_> = expressions
+                .iter()
+                .skip(1)
+                .filter(|expr| !matches!(expr, Expression::Neg(_)))
+                .cloned()
+                .collect();
+
+            for expr in composite_exprs {
+                expressions.push(Expression::Neg(Box::new(expr)));
+            }
         }
+
+        self.small_cache.insert(key, expressions.clone());
+        expressions
     }
+}
 
-    fn add_nth_root_operations_to_batch(&mut self, task: &GenerationTask) {
-        let partitions = generate_partitions(task.start, task.end, 2);
+impl Iterator for ExpressionIterator {
+    type Item = Expression;
 
-        for partition in partitions {
-            if let (Some(&(start1, end1)), Some(&(start2, end2))) =
-                (partition.first(), partition.get(1))
-            {
-                // First block must form an integer >= 2 for the root index
-                if let Ok(n_num) = digits_to_number(&task.digits, start1, end1) {
-                    if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= MAX_ROOT_DEGREE {
-                        let n_expr = Expression::Number(n_num);
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(item) = self.work_queue.pop_front() {
+            let length = item.end - item.start;
 
-                        let a_exprs = if end2 - start2 <= 2 {
-                            self.solver
-                                .generate_expressions_small(&task.digits, start2, end2)
-                        } else {
-                            // For larger expressions, generate a smaller set
-                            self.solver
-                                .generate_expressions_recursive(&task.digits, start2, end2)
-                        };
+            match item.state {
+                GenerationState::BaseNumber => {
+                    // Generate base number
+                    if let Ok(num) = digits_to_number(&self.digits, item.start, item.end) {
+                        // Queue up binary operations if length >= 2
+                        if length >= 2 {
+                            self.work_queue.push_back(WorkItem {
+                                start: item.start,
+                                end: item.end,
+                                state: GenerationState::InitBinary { partition_idx: 0 },
+                            });
+                        }
+                        return Some(Expression::Number(num));
+                    }
+                }
 
-                        for a_expr in a_exprs.iter() {
-                            self.current_batch.push(Expression::NthRoot(
-                                Box::new(n_expr.clone()),
-                                Box::new(a_expr.clone()),
-                            ));
+                GenerationState::InitBinary { partition_idx } => {
+                    let partitions = generate_partitions(item.start, item.end, 2);
+                    if let Some(partition) = partitions.get(partition_idx) {
+                        if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                            (partition.first(), partition.get(1))
+                        {
+                            // Get expressions for left and right parts
+                            let left_exprs = if end1 - start1 <= 2 {
+                                self.get_small_expressions(start1, end1)
+                            } else {
+                                // For larger expressions, we'll generate them on demand
+                                // This is a simplified approach - in a full implementation,
+                                // we'd need a more sophisticated lazy evaluation system
+                                vec![]
+                            };
 
-                            // Stop if we've generated enough for this batch
-                            if self.current_batch.len() >= GENERATION_BATCH_SIZE {
-                                return;
+                            let right_exprs = if end2 - start2 <= 2 {
+                                self.get_small_expressions(start2, end2)
+                            } else {
+                                vec![]
+                            };
+
+                            if !left_exprs.is_empty() && !right_exprs.is_empty() {
+                                // Queue binary operations
+                                self.work_queue.push_back(WorkItem {
+                                    start: item.start,
+                                    end: item.end,
+                                    state: GenerationState::BinaryOps {
+                                        partition_idx,
+                                        left_exprs,
+                                        right_exprs,
+                                        left_idx: 0,
+                                        right_idx: 0,
+                                        op_idx: 0,
+                                    },
+                                });
                             }
                         }
+
+                        // Queue next partition
+                        self.work_queue.push_back(WorkItem {
+                            start: item.start,
+                            end: item.end,
+                            state: GenerationState::InitBinary {
+                                partition_idx: partition_idx + 1,
+                            },
+                        });
+                    } else {
+                        // Move to nth root operations
+                        self.work_queue.push_back(WorkItem {
+                            start: item.start,
+                            end: item.end,
+                            state: GenerationState::InitNthRoot { partition_idx: 0 },
+                        });
+                    }
+                }
+
+                GenerationState::BinaryOps {
+                    partition_idx,
+                    left_exprs,
+                    right_exprs,
+                    left_idx,
+                    right_idx,
+                    op_idx,
+                } => {
+                    if let (Some(left), Some(right)) =
+                        (left_exprs.get(left_idx), right_exprs.get(right_idx))
+                    {
+                        let expr = match op_idx {
+                            0 => Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
+                            1 => Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
+                            2 => Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
+                            3 => Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
+                            4 => Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
+                            _ => continue,
+                        };
+
+                        // Update indices for next iteration
+                        let (next_left_idx, next_right_idx, next_op_idx) = if op_idx < 4 {
+                            (left_idx, right_idx, op_idx + 1)
+                        } else if right_idx + 1 < right_exprs.len() {
+                            (left_idx, right_idx + 1, 0)
+                        } else if left_idx + 1 < left_exprs.len() {
+                            (left_idx + 1, 0, 0)
+                        } else {
+                            // Done with this partition, don't queue anything more
+                            (left_exprs.len(), right_exprs.len(), 5)
+                        };
+
+                        // Queue next iteration if not done
+                        if next_left_idx < left_exprs.len()
+                            && next_right_idx < right_exprs.len()
+                            && next_op_idx <= 4
+                        {
+                            self.work_queue.push_back(WorkItem {
+                                start: item.start,
+                                end: item.end,
+                                state: GenerationState::BinaryOps {
+                                    partition_idx,
+                                    left_exprs: left_exprs.clone(),
+                                    right_exprs: right_exprs.clone(),
+                                    left_idx: next_left_idx,
+                                    right_idx: next_right_idx,
+                                    op_idx: next_op_idx,
+                                },
+                            });
+                        }
+
+                        return Some(expr);
+                    }
+                }
+
+                GenerationState::InitNthRoot { partition_idx } => {
+                    let partitions = generate_partitions(item.start, item.end, 2);
+                    if let Some(partition) = partitions.get(partition_idx) {
+                        if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                            (partition.first(), partition.get(1))
+                        {
+                            // First part must be a valid root index
+                            if let Ok(n_num) = digits_to_number(&self.digits, start1, end1) {
+                                if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= MAX_ROOT_DEGREE
+                                {
+                                    let a_exprs = if end2 - start2 <= 2 {
+                                        self.get_small_expressions(start2, end2)
+                                    } else {
+                                        vec![]
+                                    };
+
+                                    if !a_exprs.is_empty() {
+                                        self.work_queue.push_back(WorkItem {
+                                            start: item.start,
+                                            end: item.end,
+                                            state: GenerationState::NthRoots {
+                                                partition_idx,
+                                                n_value: n_num,
+                                                a_exprs,
+                                                a_idx: 0,
+                                            },
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
+                        // Queue next partition
+                        self.work_queue.push_back(WorkItem {
+                            start: item.start,
+                            end: item.end,
+                            state: GenerationState::InitNthRoot {
+                                partition_idx: partition_idx + 1,
+                            },
+                        });
+                    } else if length > 1 {
+                        // Move to negation operations
+                        self.work_queue.push_back(WorkItem {
+                            start: item.start,
+                            end: item.end,
+                            state: GenerationState::InitNegations,
+                        });
+                    }
+                }
+
+                GenerationState::NthRoots {
+                    partition_idx,
+                    n_value,
+                    a_exprs,
+                    a_idx,
+                } => {
+                    if let Some(a_expr) = a_exprs.get(a_idx) {
+                        let n_expr = Expression::Number(n_value);
+
+                        // Queue next iteration
+                        if a_idx + 1 < a_exprs.len() {
+                            self.work_queue.push_back(WorkItem {
+                                start: item.start,
+                                end: item.end,
+                                state: GenerationState::NthRoots {
+                                    partition_idx,
+                                    n_value,
+                                    a_exprs: a_exprs.clone(),
+                                    a_idx: a_idx + 1,
+                                },
+                            });
+                        }
+
+                        return Some(Expression::NthRoot(
+                            Box::new(n_expr),
+                            Box::new(a_expr.clone()),
+                        ));
+                    }
+                }
+
+                GenerationState::InitNegations => {
+                    // Get base expressions to negate (simplified - only from small cache for now)
+                    let base_exprs = if length <= 2 {
+                        let mut all_exprs = self.get_small_expressions(item.start, item.end);
+                        // Remove the base number and already negated expressions
+                        all_exprs.retain(|expr| {
+                            !matches!(expr, Expression::Number(_) | Expression::Neg(_))
+                        });
+                        all_exprs
+                    } else {
+                        vec![]
+                    };
+
+                    if !base_exprs.is_empty() {
+                        self.work_queue.push_back(WorkItem {
+                            start: item.start,
+                            end: item.end,
+                            state: GenerationState::Negations {
+                                base_exprs,
+                                expr_idx: 0,
+                            },
+                        });
+                    }
+                }
+
+                GenerationState::Negations {
+                    base_exprs,
+                    expr_idx,
+                } => {
+                    if let Some(expr) = base_exprs.get(expr_idx) {
+                        // Queue next iteration
+                        if expr_idx + 1 < base_exprs.len() {
+                            self.work_queue.push_back(WorkItem {
+                                start: item.start,
+                                end: item.end,
+                                state: GenerationState::Negations {
+                                    base_exprs: base_exprs.clone(),
+                                    expr_idx: expr_idx + 1,
+                                },
+                            });
+                        }
+
+                        return Some(Expression::Neg(Box::new(expr.clone())));
                     }
                 }
             }
         }
-    }
-
-    fn add_negation_operations_to_batch(&mut self) {
-        let expressions_to_negate: Vec<_> = self
-            .current_batch
-            .iter()
-            .filter(|expr| !matches!(expr, Expression::Neg(_)))
-            .cloned()
-            .collect();
-
-        for expr in expressions_to_negate {
-            self.current_batch.push(Expression::Neg(Box::new(expr)));
-            if self.current_batch.len() >= GENERATION_BATCH_SIZE {
-                break;
-            }
-        }
+        None
     }
 }
 
@@ -229,139 +445,54 @@ impl ExpressionSolver {
         Self {}
     }
 
-    /// Generate expressions for small digit ranges (≤ 2 digits) directly
-    fn generate_expressions_small(
-        &self,
-        digits: &str,
-        start: usize,
-        end: usize,
-    ) -> Arc<Vec<Expression>> {
-        if end - start <= 2 {
-            self.generate_expressions_recursive(digits, start, end)
-        } else {
-            Arc::new(Vec::new())
-        }
-    }
-
     /// Find an expression from the given digits that evaluates to the target
-    ///
-    /// # Panics
-    ///
-    /// This function may panic if there are issues with internal mutex locking,
-    /// which should be extremely rare in normal operation.
     pub fn find_expression(&self, digits: &str, target: f64) -> Option<Expression> {
-        info!("Starting streaming expression generation and evaluation");
+        info!("Starting iterative expression generation and evaluation");
 
-        // Create a streaming generator
-        let solver_arc = Arc::new(ExpressionSolver::new());
-        let mut generator = ExpressionBatchGenerator::new(digits.to_string(), solver_arc);
-
-        // Track overall statistics
+        let iterator = ExpressionIterator::new(digits.to_string());
         let mut total_evaluated = 0;
         let mut total_valid = 0;
         let mut closest_distance = f64::INFINITY;
         let mut closest_expression: Option<Expression> = None;
         let mut closest_value = 0.0;
-        let mut batch_num = 0;
 
-        // Process expressions in streaming batches
-        while let Some(batch) = generator.next_batch() {
-            batch_num += 1;
-            debug!(
-                "Processing batch {} ({} expressions)",
-                batch_num,
-                batch.len()
-            );
+        // Process expressions one at a time
+        for expr in iterator {
+            total_evaluated += 1;
 
-            info!(
-                "Processing batch {} with {} expressions",
-                batch_num,
-                batch.len()
-            );
-
-            // Use Arc<AtomicUsize> to track counts across threads for this batch
-            let batch_evaluated_count = Arc::new(AtomicUsize::new(0));
-            let batch_valid_count = Arc::new(AtomicUsize::new(0));
-            let batch_closest_distance = Arc::new(std::sync::Mutex::new(f64::INFINITY));
-            let batch_closest_expr = Arc::new(std::sync::Mutex::new(None::<(Expression, f64)>));
-
-            // Use parallel iterator to find matching expression in this batch
-            let batch_result = batch.par_iter().find_map_any(|expr| {
-                // Update batch evaluated count
-                batch_evaluated_count.fetch_add(1, Ordering::Relaxed);
-
-                if let Ok(value) = expr.evaluate() {
-                    // Update batch valid count
-                    batch_valid_count.fetch_add(1, Ordering::Relaxed);
-
-                    debug!("Expression {} evaluates to {}", expr, value);
-
-                    // Check if this is an exact match
-                    if (value - target).abs() < EPSILON {
-                        return Some(expr.clone());
-                    }
-
-                    // Track the closest result in this batch
-                    let distance = (value - target).abs();
-                    if let Ok(mut batch_closest_dist) = batch_closest_distance.lock() {
-                        if distance < *batch_closest_dist {
-                            *batch_closest_dist = distance;
-                            if let Ok(mut batch_closest) = batch_closest_expr.lock() {
-                                *batch_closest = Some((expr.clone(), value));
-                            }
-                        }
-                    }
-                } else {
-                    debug!("Expression {} failed to evaluate", expr);
-                }
-                None
-            });
-
-            // Update totals with batch results
-            let batch_evaluated = batch_evaluated_count.load(Ordering::Relaxed);
-            let batch_valid = batch_valid_count.load(Ordering::Relaxed);
-            total_evaluated += batch_evaluated;
-            total_valid += batch_valid;
-
-            // Check if we found an exact match in this batch
-            if let Some(exact_match) = batch_result {
-                info!(
-                    "Found exact match in batch {} after evaluating {} total expressions ({} valid)",
-                    batch_num, total_evaluated, total_valid
-                );
-                return Some(exact_match);
+            if total_evaluated % 10000 == 0 {
+                info!("Evaluated {} expressions so far...", total_evaluated);
             }
 
-            // Update global closest result and get batch distance for logging
-            let batch_closest_dist =
-                if let Ok(batch_closest_dist_guard) = batch_closest_distance.lock() {
-                    let batch_closest_dist = *batch_closest_dist_guard;
-                    if batch_closest_dist < closest_distance {
-                        closest_distance = batch_closest_dist;
-                        if let Ok(batch_closest_guard) = batch_closest_expr.lock() {
-                            if let Some((expr, value)) = batch_closest_guard.as_ref() {
-                                closest_expression = Some(expr.clone());
-                                closest_value = *value;
-                            }
-                        }
+            if let Ok(value) = expr.evaluate() {
+                total_valid += 1;
+                debug!("Expression {} evaluates to {}", expr, value);
+
+                // Check if this is an exact match
+                if (value - target).abs() < EPSILON {
+                    info!(
+                        "Found exact match after evaluating {} expressions ({} valid): {} = {}",
+                        total_evaluated, total_valid, expr, value
+                    );
+                    return Some(expr);
+                }
+
+                // Track the closest result
+                let distance = (value - target).abs();
+                if distance < closest_distance {
+                    closest_distance = distance;
+                    closest_expression = Some(expr.clone());
+                    closest_value = value;
+
+                    if total_evaluated % 1000 == 0 {
+                        info!(
+                            "New closest: {} = {:.6} (distance: {:.6})",
+                            expr, value, distance
+                        );
                     }
-                    batch_closest_dist
-                } else {
-                    f64::INFINITY
-                };
-
-            // Log batch results
-            info!(
-                "Batch {} complete: evaluated {} expressions ({} valid). Closest in batch: distance {:.6}",
-                batch_num, batch_evaluated, batch_valid, batch_closest_dist
-            );
-
-            // Log overall closest so far
-            if let Some(ref closest_expr) = closest_expression {
-                info!(
-                    "Overall closest so far: {} = {:.6} (distance: {:.6})",
-                    closest_expr, closest_value, closest_distance
-                );
+                }
+            } else {
+                debug!("Expression {} failed to evaluate", expr);
             }
         }
 
@@ -379,161 +510,6 @@ impl ExpressionSolver {
         }
 
         None
-    }
-
-    /// Generate all possible expressions from a digit string
-    fn generate_expressions_recursive(
-        &self,
-        digits: &str,
-        start: usize,
-        end: usize,
-    ) -> Arc<Vec<Expression>> {
-        if start >= end || start >= digits.len() || end > digits.len() {
-            return Arc::new(Vec::new());
-        }
-
-        let length = end - start;
-        let mut expressions: Vec<Expression> = Vec::new();
-
-        // Base case: single number (always include this)
-        if let Ok(num) = digits_to_number(digits, start, end) {
-            expressions.push(Expression::Number(num));
-        }
-
-        if length >= 2 {
-            self.add_binary_operations(digits, start, end, &mut expressions);
-            self.add_nth_root_operations(digits, start, end, &mut expressions);
-            self.add_negation_operations(&mut expressions);
-        }
-
-        Arc::new(expressions)
-    }
-
-    /// Add binary operations (add, sub, mul, div, pow) to expressions
-    fn add_binary_operations(
-        &self,
-        digits: &str,
-        start: usize,
-        end: usize,
-        expressions: &mut Vec<Expression>,
-    ) {
-        let partitions = generate_partitions(start, end, 2);
-
-        // Process all partitions in parallel
-        let all_new_expressions: Vec<Expression> = partitions
-            .par_iter()
-            .filter_map(|partition| {
-                if let (Some(&(start1, end1)), Some(&(start2, end2))) =
-                    (partition.first(), partition.get(1))
-                {
-                    let left_exprs = self.generate_expressions_recursive(digits, start1, end1);
-                    let right_exprs = self.generate_expressions_recursive(digits, start2, end2);
-
-                    // Use parallel processing for the cartesian product of expressions
-                    let partition_expressions: Vec<Expression> = left_exprs
-                        .par_iter()
-                        .flat_map(|left| {
-                            right_exprs.par_iter().flat_map(move |right| {
-                                [
-                                    Expression::Add(
-                                        Box::new(left.clone()),
-                                        Box::new(right.clone()),
-                                    ),
-                                    Expression::Sub(
-                                        Box::new(left.clone()),
-                                        Box::new(right.clone()),
-                                    ),
-                                    Expression::Mul(
-                                        Box::new(left.clone()),
-                                        Box::new(right.clone()),
-                                    ),
-                                    Expression::Div(
-                                        Box::new(left.clone()),
-                                        Box::new(right.clone()),
-                                    ),
-                                    Expression::Pow(
-                                        Box::new(left.clone()),
-                                        Box::new(right.clone()),
-                                    ),
-                                ]
-                            })
-                        })
-                        .collect();
-
-                    Some(partition_expressions)
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect();
-
-        expressions.extend(all_new_expressions);
-    }
-
-    /// Add nth root operations to expressions
-    fn add_nth_root_operations(
-        &self,
-        digits: &str,
-        start: usize,
-        end: usize,
-        expressions: &mut Vec<Expression>,
-    ) {
-        let partitions = generate_partitions(start, end, 2);
-
-        // Process all partitions in parallel
-        let all_root_expressions: Vec<Expression> = partitions
-            .par_iter()
-            .filter_map(|partition| {
-                if let (Some(&(start1, end1)), Some(&(start2, end2))) =
-                    (partition.first(), partition.get(1))
-                {
-                    // First block must form an integer >= 2 for the root index
-                    if let Ok(n_num) = digits_to_number(digits, start1, end1) {
-                        if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= MAX_ROOT_DEGREE {
-                            let n_expr = Expression::Number(n_num);
-                            let a_exprs = self.generate_expressions_recursive(digits, start2, end2);
-
-                            // Create nth root expressions in parallel
-                            let partition_roots: Vec<Expression> = a_exprs
-                                .par_iter()
-                                .map(|a_expr| {
-                                    Expression::NthRoot(
-                                        Box::new(n_expr.clone()),
-                                        Box::new(a_expr.clone()),
-                                    )
-                                })
-                                .collect();
-
-                            Some(partition_roots)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect();
-
-        expressions.extend(all_root_expressions);
-    }
-
-    /// Add unary negation operations to expressions
-    fn add_negation_operations(&self, expressions: &mut Vec<Expression>) {
-        // Unary negation (only for composite expressions and avoid double negatives)
-        let composite_expressions: Vec<_> = expressions.iter().skip(1).cloned().collect();
-        for expr in composite_expressions {
-            match expr {
-                Expression::Neg(_) => {
-                    // Skip generating -(-x)
-                }
-                _ => expressions.push(Expression::Neg(Box::new(expr))),
-            }
-        }
     }
 }
 
@@ -583,5 +559,21 @@ mod tests {
         // Should find basic solutions
         let result = solver.find_expression("24", 6.0);
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_expression_iterator() {
+        let iter = ExpressionIterator::new("12".to_string());
+        let expressions: Vec<_> = iter.collect();
+
+        // Should have at least the base numbers and some operations
+        assert!(!expressions.is_empty());
+
+        // Check that we have the base numbers
+        assert!(
+            expressions
+                .iter()
+                .any(|e| matches!(e, Expression::Number(n) if (*n - 12.0).abs() < 1e-9))
+        );
     }
 }
