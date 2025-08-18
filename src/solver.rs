@@ -3,6 +3,7 @@ use crate::utils::{UtilsError, digits_to_number, generate_partitions};
 use dashmap::DashMap;
 use log::{debug, info};
 use rayon::prelude::*;
+use std::collections::VecDeque;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -21,7 +22,204 @@ pub enum SolverError {
 // Default configuration constants
 const MAX_ROOT_DEGREE: f64 = 10.0;
 const EPSILON: f64 = 1e-9;
-const BATCH_SIZE: usize = 10000; // Process expressions in batches to avoid OOM
+const GENERATION_BATCH_SIZE: usize = 5000; // Generate expressions in smaller batches
+
+/// Represents a work item for generating expressions
+#[derive(Debug, Clone)]
+struct GenerationTask {
+    digits: String,
+    start: usize,
+    end: usize,
+    depth: usize,
+}
+
+/// Streaming expression generator that produces expressions in batches
+pub struct ExpressionBatchGenerator {
+    work_queue: VecDeque<GenerationTask>,
+    solver: Arc<ExpressionSolver>,
+    current_batch: Vec<Expression>,
+    total_generated: usize,
+}
+
+impl ExpressionBatchGenerator {
+    fn new(digits: String, solver: Arc<ExpressionSolver>) -> Self {
+        let mut work_queue = VecDeque::new();
+        work_queue.push_back(GenerationTask {
+            digits: digits.clone(),
+            start: 0,
+            end: digits.len(),
+            depth: 0,
+        });
+
+        info!(
+            "Initialized streaming expression generator with {} digits, batch size: {}",
+            digits.len(),
+            GENERATION_BATCH_SIZE
+        );
+
+        Self {
+            work_queue,
+            solver,
+            current_batch: Vec::new(),
+            total_generated: 0,
+        }
+    }
+
+    /// Generate the next batch of expressions
+    fn next_batch(&mut self) -> Option<Vec<Expression>> {
+        self.current_batch.clear();
+
+        // Process work items until we have enough expressions for a batch or run out of work
+        while self.current_batch.len() < GENERATION_BATCH_SIZE && !self.work_queue.is_empty() {
+            if let Some(task) = self.work_queue.pop_front() {
+                self.process_task(task);
+            }
+        }
+
+        if self.current_batch.is_empty() {
+            None
+        } else {
+            self.total_generated += self.current_batch.len();
+            info!(
+                "Generated batch of {} expressions (total: {})",
+                self.current_batch.len(),
+                self.total_generated
+            );
+            Some(self.current_batch.clone())
+        }
+    }
+
+    fn process_task(&mut self, task: GenerationTask) {
+        let length = task.end - task.start;
+
+        // Base case: single number
+        if let Ok(num) = digits_to_number(&task.digits, task.start, task.end) {
+            self.current_batch.push(Expression::Number(num));
+        }
+
+        if length >= 2 {
+            // Add binary operations
+            self.add_binary_operations_to_batch(&task);
+            // Add nth root operations
+            self.add_nth_root_operations_to_batch(&task);
+            // Add negation operations (only for composite expressions)
+            if task.depth > 0 {
+                self.add_negation_operations_to_batch();
+            }
+        }
+    }
+
+    fn add_binary_operations_to_batch(&mut self, task: &GenerationTask) {
+        let partitions = generate_partitions(task.start, task.end, 2);
+
+        for partition in partitions {
+            if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                (partition.first(), partition.get(1))
+            {
+                // Generate smaller sub-expressions directly if they're small enough
+                let left_exprs = if end1 - start1 <= 2 {
+                    self.solver
+                        .generate_expressions_small(&task.digits, start1, end1)
+                } else {
+                    // Add to work queue for later processing
+                    self.work_queue.push_back(GenerationTask {
+                        digits: task.digits.clone(),
+                        start: start1,
+                        end: end1,
+                        depth: task.depth + 1,
+                    });
+                    continue;
+                };
+
+                let right_exprs = if end2 - start2 <= 2 {
+                    self.solver
+                        .generate_expressions_small(&task.digits, start2, end2)
+                } else {
+                    // Add to work queue for later processing
+                    self.work_queue.push_back(GenerationTask {
+                        digits: task.digits.clone(),
+                        start: start2,
+                        end: end2,
+                        depth: task.depth + 1,
+                    });
+                    continue;
+                };
+
+                // Generate binary operations
+                for left in left_exprs.iter() {
+                    for right in right_exprs.iter() {
+                        self.current_batch.extend([
+                            Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
+                        ]);
+
+                        // Stop if we've generated enough for this batch
+                        if self.current_batch.len() >= GENERATION_BATCH_SIZE {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_nth_root_operations_to_batch(&mut self, task: &GenerationTask) {
+        let partitions = generate_partitions(task.start, task.end, 2);
+
+        for partition in partitions {
+            if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                (partition.first(), partition.get(1))
+            {
+                // First block must form an integer >= 2 for the root index
+                if let Ok(n_num) = digits_to_number(&task.digits, start1, end1) {
+                    if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= MAX_ROOT_DEGREE {
+                        let n_expr = Expression::Number(n_num);
+
+                        let a_exprs = if end2 - start2 <= 2 {
+                            self.solver
+                                .generate_expressions_small(&task.digits, start2, end2)
+                        } else {
+                            // For larger expressions, generate a smaller set
+                            self.solver
+                                .generate_expressions_recursive(&task.digits, start2, end2)
+                        };
+
+                        for a_expr in a_exprs.iter() {
+                            self.current_batch.push(Expression::NthRoot(
+                                Box::new(n_expr.clone()),
+                                Box::new(a_expr.clone()),
+                            ));
+
+                            // Stop if we've generated enough for this batch
+                            if self.current_batch.len() >= GENERATION_BATCH_SIZE {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_negation_operations_to_batch(&mut self) {
+        let expressions_to_negate: Vec<_> = self
+            .current_batch
+            .iter()
+            .filter(|expr| !matches!(expr, Expression::Neg(_)))
+            .cloned()
+            .collect();
+
+        for expr in expressions_to_negate {
+            self.current_batch.push(Expression::Neg(Box::new(expr)));
+            if self.current_batch.len() >= GENERATION_BATCH_SIZE {
+                break;
+            }
+        }
+    }
+}
 
 /// Main solver for finding expressions that match a target value
 pub struct ExpressionSolver {
@@ -37,6 +235,20 @@ impl ExpressionSolver {
         }
     }
 
+    /// Generate expressions for small digit ranges (≤ 2 digits) directly
+    fn generate_expressions_small(
+        &self,
+        digits: &str,
+        start: usize,
+        end: usize,
+    ) -> Arc<Vec<Expression>> {
+        if end - start <= 2 {
+            self.generate_expressions_recursive(digits, start, end)
+        } else {
+            Arc::new(Vec::new())
+        }
+    }
+
     /// Find an expression from the given digits that evaluates to the target
     ///
     /// # Panics
@@ -44,14 +256,11 @@ impl ExpressionSolver {
     /// This function may panic if there are issues with internal mutex locking,
     /// which should be extremely rare in normal operation.
     pub fn find_expression(&self, digits: &str, target: f64) -> Option<Expression> {
-        let all_expressions = self.generate_expressions(digits, 0, digits.len());
-        let total_expressions = all_expressions.len();
+        info!("Starting streaming expression generation and evaluation");
 
-        debug!("Generated {} expressions to evaluate", total_expressions);
-        info!(
-            "Processing {} expressions in batches of {}",
-            total_expressions, BATCH_SIZE
-        );
+        // Create a streaming generator
+        let solver_arc = Arc::new(ExpressionSolver::new());
+        let mut generator = ExpressionBatchGenerator::new(digits.to_string(), solver_arc);
 
         // Track overall statistics
         let mut total_evaluated = 0;
@@ -59,12 +268,20 @@ impl ExpressionSolver {
         let mut closest_distance = f64::INFINITY;
         let mut closest_expression: Option<Expression> = None;
         let mut closest_value = 0.0;
+        let mut batch_num = 0;
 
-        // Process expressions in batches
-        for (batch_num, batch) in all_expressions.chunks(BATCH_SIZE).enumerate() {
+        // Process expressions in streaming batches
+        while let Some(batch) = generator.next_batch() {
+            batch_num += 1;
             debug!(
                 "Processing batch {} ({} expressions)",
-                batch_num + 1,
+                batch_num,
+                batch.len()
+            );
+
+            info!(
+                "Processing batch {} with {} expressions",
+                batch_num,
                 batch.len()
             );
 
@@ -116,9 +333,7 @@ impl ExpressionSolver {
             if let Some(exact_match) = batch_result {
                 info!(
                     "Found exact match in batch {} after evaluating {} total expressions ({} valid)",
-                    batch_num + 1,
-                    total_evaluated,
-                    total_valid
+                    batch_num, total_evaluated, total_valid
                 );
                 return Some(exact_match);
             }
@@ -144,10 +359,7 @@ impl ExpressionSolver {
             // Log batch results
             info!(
                 "Batch {} complete: evaluated {} expressions ({} valid). Closest in batch: distance {:.6}",
-                batch_num + 1,
-                batch_evaluated,
-                batch_valid,
-                batch_closest_dist
+                batch_num, batch_evaluated, batch_valid, batch_closest_dist
             );
 
             // Log overall closest so far
@@ -336,11 +548,6 @@ impl ExpressionSolver {
                 _ => expressions.push(Expression::Neg(Box::new(expr))),
             }
         }
-    }
-
-    /// Generate all possible expressions from a digit string
-    fn generate_expressions(&self, digits: &str, start: usize, end: usize) -> Arc<Vec<Expression>> {
-        self.generate_expressions_recursive(digits, start, end)
     }
 }
 
