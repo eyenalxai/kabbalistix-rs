@@ -1,5 +1,13 @@
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
 use crate::solver::{ExpressionSolver, SolverConfig};
 use crate::utils::validate_digit_string;
+use anyhow::{Context, Result};
 use std::env;
 
 /// Configuration for the CLI application
@@ -10,19 +18,24 @@ pub struct CliConfig {
 }
 
 /// Parse command line arguments and return configuration
-pub fn parse_args() -> Result<CliConfig, String> {
+pub fn parse_args() -> Result<CliConfig> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        return Err(format!("Usage: {} <digit_string> <target_number>", args[0]));
+        let program_name = args.first().map(|s| s.as_str()).unwrap_or("program");
+        anyhow::bail!("Usage: {} <digit_string> <target_number>", program_name);
     }
 
-    let digit_string = args[1].clone();
-    let target: f64 = args[2]
+    let digit_string = args
+        .get(1)
+        .context("Missing digit string argument")?
+        .clone();
+    let target_str = args.get(2).context("Missing target number argument")?;
+    let target: f64 = target_str
         .parse()
-        .map_err(|_| format!("Invalid target number: {}", args[2]))?;
+        .with_context(|| format!("Invalid target number: {}", target_str))?;
 
     // Validate digit string
-    validate_digit_string(&digit_string)?;
+    validate_digit_string(&digit_string).context("Invalid digit string")?;
 
     Ok(CliConfig {
         digit_string,
@@ -32,7 +45,7 @@ pub fn parse_args() -> Result<CliConfig, String> {
 }
 
 /// Run the main application logic
-pub fn run() -> Result<(), String> {
+pub fn run() -> Result<()> {
     let config = parse_args()?;
     let solver = ExpressionSolver::new(config.solver_config);
 
@@ -65,6 +78,8 @@ mod tests {
     fn test_parse_target_number() {
         let target: Result<f64, _> = "42.5".parse();
         assert!(target.is_ok());
-        assert_eq!(target.unwrap(), 42.5);
+        if let Ok(value) = target {
+            assert_eq!(value, 42.5);
+        }
     }
 }

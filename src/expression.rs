@@ -1,4 +1,18 @@
 use std::fmt;
+use thiserror::Error;
+
+/// Errors that can occur during expression evaluation
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum ExpressionError {
+    #[error("Division by zero")]
+    DivisionByZero,
+    #[error("Complex result from negative base with fractional exponent")]
+    ComplexResult,
+    #[error("Root index must be an integer >= 2")]
+    InvalidRootIndex,
+    #[error("Even root of negative number")]
+    EvenRootOfNegative,
+}
 
 /// Represents mathematical expressions that can be built from digits
 #[derive(Debug, Clone)]
@@ -30,7 +44,7 @@ impl fmt::Display for Expression {
 
 impl Expression {
     /// Evaluates the expression and returns the result
-    pub fn evaluate(&self) -> Result<f64, String> {
+    pub fn evaluate(&self) -> Result<f64, ExpressionError> {
         match self {
             Expression::Number(n) => Ok(*n),
             Expression::Add(l, r) => {
@@ -52,7 +66,7 @@ impl Expression {
                 let left = l.evaluate()?;
                 let right = r.evaluate()?;
                 if right == 0.0 {
-                    Err("Division by zero".to_string())
+                    Err(ExpressionError::DivisionByZero)
                 } else {
                     Ok(left / right)
                 }
@@ -61,7 +75,7 @@ impl Expression {
                 let left = l.evaluate()?;
                 let right = r.evaluate()?;
                 if left < 0.0 && right.fract() != 0.0 {
-                    Err("Complex result from negative base with fractional exponent".to_string())
+                    Err(ExpressionError::ComplexResult)
                 } else {
                     Ok(left.powf(right))
                 }
@@ -74,9 +88,9 @@ impl Expression {
                 let n_val = n.evaluate()?;
                 let a_val = a.evaluate()?;
                 if n_val < 2.0 || n_val.fract() != 0.0 {
-                    Err("Root index must be an integer >= 2".to_string())
+                    Err(ExpressionError::InvalidRootIndex)
                 } else if a_val < 0.0 && (n_val as i32) % 2 == 0 {
-                    Err("Even root of negative number".to_string())
+                    Err(ExpressionError::EvenRootOfNegative)
                 } else if a_val < 0.0 && (n_val as i32) % 2 == 1 {
                     // Odd root of negative number: compute as -((-a)^(1/n))
                     Ok(-((-a_val).powf(1.0 / n_val)))
@@ -99,8 +113,15 @@ mod tests {
             Box::new(Expression::Number(3.0)),
             Box::new(Expression::Number(27.0)),
         );
-        let result = expr.evaluate().unwrap();
-        assert!((result - 3.0).abs() < 1e-9, "Expected 3.0, got {}", result);
+        let result = expr.evaluate();
+        assert!(
+            result.is_ok(),
+            "Expression should evaluate successfully but got: {:?}",
+            result.err()
+        );
+        if let Ok(value) = result {
+            assert!((value - 3.0).abs() < 1e-9, "Expected 3.0, got {}", value);
+        }
     }
 
     #[test]
@@ -110,12 +131,15 @@ mod tests {
             Box::new(Expression::Number(2.0)),
             Box::new(Expression::Number(100.0)),
         );
-        let result = expr.evaluate().unwrap();
+        let result = expr.evaluate();
         assert!(
-            (result - 10.0).abs() < 1e-9,
-            "Expected 10.0, got {}",
-            result
+            result.is_ok(),
+            "Expression should evaluate successfully but got: {:?}",
+            result.err()
         );
+        if let Ok(value) = result {
+            assert!((value - 10.0).abs() < 1e-9, "Expected 10.0, got {}", value);
+        }
     }
 
     #[test]
@@ -125,8 +149,15 @@ mod tests {
             Box::new(Expression::Number(4.0)),
             Box::new(Expression::Number(81.0)),
         );
-        let result = expr.evaluate().unwrap();
-        assert!((result - 3.0).abs() < 1e-9, "Expected 3.0, got {}", result);
+        let result = expr.evaluate();
+        assert!(
+            result.is_ok(),
+            "Expression should evaluate successfully but got: {:?}",
+            result.err()
+        );
+        if let Ok(value) = result {
+            assert!((value - 3.0).abs() < 1e-9, "Expected 3.0, got {}", value);
+        }
     }
 
     #[test]
@@ -136,8 +167,15 @@ mod tests {
             Box::new(Expression::Number(2.0)),
             Box::new(Expression::Number(49.0)),
         );
-        let result = expr.evaluate().unwrap();
-        assert!((result - 7.0).abs() < 1e-9, "Expected 7.0, got {}", result);
+        let result = expr.evaluate();
+        assert!(
+            result.is_ok(),
+            "Expression should evaluate successfully but got: {:?}",
+            result.err()
+        );
+        if let Ok(value) = result {
+            assert!((value - 7.0).abs() < 1e-9, "Expected 7.0, got {}", value);
+        }
     }
 
     #[test]
@@ -148,8 +186,19 @@ mod tests {
             Box::new(Expression::Number(16.0)),
         );
         let result = expr.evaluate();
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Root index must be an integer >= 2");
+        assert!(
+            result.is_err(),
+            "Expected error but got success: {:?}",
+            result.ok()
+        );
+        if let Err(e) = result {
+            assert_eq!(
+                e,
+                ExpressionError::InvalidRootIndex,
+                "Expected InvalidRootIndex error but got: {:?}",
+                e
+            );
+        }
     }
 
     #[test]
@@ -160,8 +209,19 @@ mod tests {
             Box::new(Expression::Number(16.0)),
         );
         let result = expr.evaluate();
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Root index must be an integer >= 2");
+        assert!(
+            result.is_err(),
+            "Expected error but got success: {:?}",
+            result.ok()
+        );
+        if let Err(e) = result {
+            assert_eq!(
+                e,
+                ExpressionError::InvalidRootIndex,
+                "Expected InvalidRootIndex error but got: {:?}",
+                e
+            );
+        }
     }
 
     #[test]
@@ -172,8 +232,19 @@ mod tests {
             Box::new(Expression::Number(-16.0)),
         );
         let result = expr.evaluate();
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Even root of negative number");
+        assert!(
+            result.is_err(),
+            "Expected error but got success: {:?}",
+            result.ok()
+        );
+        if let Err(e) = result {
+            assert_eq!(
+                e,
+                ExpressionError::EvenRootOfNegative,
+                "Expected EvenRootOfNegative error but got: {:?}",
+                e
+            );
+        }
     }
 
     #[test]
@@ -183,12 +254,19 @@ mod tests {
             Box::new(Expression::Number(3.0)),
             Box::new(Expression::Number(-27.0)),
         );
-        let result = expr.evaluate().unwrap();
+        let result = expr.evaluate();
         assert!(
-            (result - (-3.0)).abs() < 1e-9,
-            "Expected -3.0, got {}",
-            result
+            result.is_ok(),
+            "Expression should evaluate successfully but got: {:?}",
+            result.err()
         );
+        if let Ok(value) = result {
+            assert!(
+                (value - (-3.0)).abs() < 1e-9,
+                "Expected -3.0, got {}",
+                value
+            );
+        }
     }
 
     #[test]
@@ -198,8 +276,15 @@ mod tests {
             Box::new(Expression::Number(5.0)),
             Box::new(Expression::Number(32.0)),
         );
-        let result = expr.evaluate().unwrap();
-        assert!((result - 2.0).abs() < 1e-9, "Expected 2.0, got {}", result);
+        let result = expr.evaluate();
+        assert!(
+            result.is_ok(),
+            "Expression should evaluate successfully but got: {:?}",
+            result.err()
+        );
+        if let Ok(value) = result {
+            assert!((value - 2.0).abs() < 1e-9, "Expected 2.0, got {}", value);
+        }
     }
 
     #[test]

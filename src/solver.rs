@@ -1,6 +1,16 @@
-use crate::expression::Expression;
-use crate::utils::{digits_to_number, generate_partitions};
+use crate::expression::{Expression, ExpressionError};
+use crate::utils::{UtilsError, digits_to_number, generate_partitions};
 use std::collections::HashMap;
+use thiserror::Error;
+
+/// Errors that can occur during solving
+#[derive(Error, Debug)]
+pub enum SolverError {
+    #[error("Expression evaluation error: {0}")]
+    ExpressionError(#[from] ExpressionError),
+    #[error("Utils error: {0}")]
+    UtilsError(#[from] UtilsError),
+}
 
 /// Memoization cache for expressions
 type ExprCache = HashMap<(usize, usize), Vec<Expression>>;
@@ -82,8 +92,9 @@ impl ExpressionSolver {
         let mut expressions = Vec::new();
 
         // Base case: single number (always include this)
-        let num = digits_to_number(digits, start, end);
-        expressions.push(Expression::Number(num));
+        if let Ok(num) = digits_to_number(digits, start, end) {
+            expressions.push(Expression::Number(num));
+        }
 
         if length >= 2 {
             self.add_binary_operations(digits, start, end, cache, &mut expressions);
@@ -106,21 +117,22 @@ impl ExpressionSolver {
         expressions: &mut Vec<Expression>,
     ) {
         for partition in generate_partitions(start, end, 2) {
-            let (start1, end1) = partition[0];
-            let (start2, end2) = partition[1];
+            if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                (partition.first(), partition.get(1))
+            {
+                let left_exprs = self.generate_expressions_memo(digits, start1, end1, cache);
+                let right_exprs = self.generate_expressions_memo(digits, start2, end2, cache);
 
-            let left_exprs = self.generate_expressions_memo(digits, start1, end1, cache);
-            let right_exprs = self.generate_expressions_memo(digits, start2, end2, cache);
-
-            for left in &left_exprs {
-                for right in &right_exprs {
-                    expressions.extend([
-                        Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
-                        Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
-                        Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
-                        Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
-                        Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
-                    ]);
+                for left in &left_exprs {
+                    for right in &right_exprs {
+                        expressions.extend([
+                            Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
+                        ]);
+                    }
                 }
             }
         }
@@ -136,20 +148,23 @@ impl ExpressionSolver {
         expressions: &mut Vec<Expression>,
     ) {
         for partition in generate_partitions(start, end, 2) {
-            let (start1, end1) = partition[0];
-            let (start2, end2) = partition[1];
+            if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                (partition.first(), partition.get(1))
+            {
+                // First block must form an integer >= 2 for the root index
+                if let Ok(n_num) = digits_to_number(digits, start1, end1) {
+                    if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= self.config.max_root_degree
+                    {
+                        let n_expr = Expression::Number(n_num);
+                        let a_exprs = self.generate_expressions_memo(digits, start2, end2, cache);
 
-            // First block must form an integer >= 2 for the root index
-            let n_num = digits_to_number(digits, start1, end1);
-            if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= self.config.max_root_degree {
-                let n_expr = Expression::Number(n_num);
-                let a_exprs = self.generate_expressions_memo(digits, start2, end2, cache);
-
-                for a_expr in &a_exprs {
-                    expressions.push(Expression::NthRoot(
-                        Box::new(n_expr.clone()),
-                        Box::new(a_expr.clone()),
-                    ));
+                        for a_expr in &a_exprs {
+                            expressions.push(Expression::NthRoot(
+                                Box::new(n_expr.clone()),
+                                Box::new(a_expr.clone()),
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -189,17 +204,25 @@ mod tests {
         let result = solver.find_expression("327", 3.0);
         assert!(result.is_some());
 
-        let expr = result.unwrap();
-        let value = expr.evaluate().unwrap();
-        assert!((value - 3.0).abs() < 1e-9);
+        if let Some(expr) = result {
+            let result = expr.evaluate();
+            assert!(
+                result.is_ok(),
+                "Expression should evaluate successfully but got: {:?}",
+                result.err()
+            );
+            if let Ok(value) = result {
+                assert!((value - 3.0).abs() < 1e-9);
+            }
 
-        // Check that it's actually using nth root (not just arithmetic)
-        let expr_str = format!("{}", expr);
-        assert!(
-            expr_str.contains("√3(27)"),
-            "Expected nth root expression, got: {}",
-            expr_str
-        );
+            // Check that it's actually using nth root (not just arithmetic)
+            let expr_str = format!("{}", expr);
+            assert!(
+                expr_str.contains("√3(27)"),
+                "Expected nth root expression, got: {}",
+                expr_str
+            );
+        }
     }
 
     #[test]

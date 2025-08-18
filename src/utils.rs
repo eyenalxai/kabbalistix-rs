@@ -1,3 +1,20 @@
+use thiserror::Error;
+
+/// Errors that can occur in utility functions
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum UtilsError {
+    #[error("Digit string cannot be empty")]
+    EmptyDigitString,
+    #[error("Digit string must contain only digits: {0}")]
+    InvalidDigitString(String),
+    #[error("Invalid range: start={start}, end={end}, length={length}")]
+    InvalidRange {
+        start: usize,
+        end: usize,
+        length: usize,
+    },
+}
+
 /// Generate all possible ways to partition a range of digits into consecutive blocks
 pub fn generate_partitions(
     start: usize,
@@ -21,21 +38,32 @@ pub fn generate_partitions(
 }
 
 /// Convert a digit range to a number
-pub fn digits_to_number(digits: &str, start: usize, end: usize) -> f64 {
-    digits[start..end].parse::<f64>().unwrap_or(0.0)
+pub fn digits_to_number(digits: &str, start: usize, end: usize) -> Result<f64, UtilsError> {
+    if start >= digits.len() || end > digits.len() || start >= end {
+        return Err(UtilsError::InvalidRange {
+            start,
+            end,
+            length: digits.len(),
+        });
+    }
+
+    let slice = digits.get(start..end).ok_or(UtilsError::InvalidRange {
+        start,
+        end,
+        length: digits.len(),
+    })?;
+
+    Ok(slice.parse::<f64>().unwrap_or(0.0))
 }
 
 /// Validates that a string contains only ASCII digits
-pub fn validate_digit_string(digit_string: &str) -> Result<(), String> {
+pub fn validate_digit_string(digit_string: &str) -> Result<(), UtilsError> {
     if digit_string.is_empty() {
-        return Err("Digit string cannot be empty".to_string());
+        return Err(UtilsError::EmptyDigitString);
     }
 
     if !digit_string.chars().all(|c| c.is_ascii_digit()) {
-        return Err(format!(
-            "Digit string must contain only digits: {}",
-            digit_string
-        ));
+        return Err(UtilsError::InvalidDigitString(digit_string.to_string()));
     }
 
     Ok(())
@@ -60,9 +88,32 @@ mod tests {
 
     #[test]
     fn test_digits_to_number() {
-        assert_eq!(digits_to_number("12345", 0, 3), 123.0);
-        assert_eq!(digits_to_number("12345", 2, 5), 345.0);
-        assert_eq!(digits_to_number("12345", 1, 4), 234.0);
+        let result = digits_to_number("12345", 0, 3);
+        assert!(result.is_ok());
+        if let Ok(value) = result {
+            assert_eq!(value, 123.0);
+        }
+
+        let result = digits_to_number("12345", 2, 5);
+        assert!(result.is_ok());
+        if let Ok(value) = result {
+            assert_eq!(value, 345.0);
+        }
+
+        let result = digits_to_number("12345", 1, 4);
+        assert!(result.is_ok());
+        if let Ok(value) = result {
+            assert_eq!(value, 234.0);
+        }
+    }
+
+    #[test]
+    fn test_digits_to_number_invalid_range() {
+        let result = digits_to_number("12345", 0, 10);
+        assert!(result.is_err());
+
+        let result = digits_to_number("12345", 5, 3);
+        assert!(result.is_err());
     }
 
     #[test]
