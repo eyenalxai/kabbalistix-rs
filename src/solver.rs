@@ -1,6 +1,5 @@
 use crate::expression::{Expression, ExpressionError};
 use crate::utils::{UtilsError, digits_to_number, generate_partitions};
-use dashmap::DashMap;
 use log::{debug, info};
 use rayon::prelude::*;
 use std::collections::VecDeque;
@@ -222,17 +221,12 @@ impl ExpressionBatchGenerator {
 }
 
 /// Main solver for finding expressions that match a target value
-pub struct ExpressionSolver {
-    // Memoization cache: (start, end) -> all expressions generated for that slice
-    cache: DashMap<(usize, usize), Arc<Vec<Expression>>>,
-}
+pub struct ExpressionSolver {}
 
 impl ExpressionSolver {
     /// Create a new expression solver
     pub fn new() -> Self {
-        Self {
-            cache: DashMap::new(),
-        }
+        Self {}
     }
 
     /// Generate expressions for small digit ranges (≤ 2 digits) directly
@@ -398,11 +392,6 @@ impl ExpressionSolver {
             return Arc::new(Vec::new());
         }
 
-        // Check memoization cache first
-        if let Some(found) = self.cache.get(&(start, end)) {
-            return Arc::clone(&found);
-        }
-
         let length = end - start;
         let mut expressions: Vec<Expression> = Vec::new();
 
@@ -417,10 +406,7 @@ impl ExpressionSolver {
             self.add_negation_operations(&mut expressions);
         }
 
-        let arc_vec = Arc::new(expressions);
-        // Insert into cache for future reuse
-        let _ = self.cache.insert((start, end), Arc::clone(&arc_vec));
-        arc_vec
+        Arc::new(expressions)
     }
 
     /// Add binary operations (add, sub, mul, div, pow) to expressions
