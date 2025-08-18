@@ -57,8 +57,17 @@ enum GenerationState {
         base_exprs: Vec<Expression>,
         expr_idx: usize,
     },
-    /// Initialize binary operations for a partition
-    InitBinary { partition_idx: usize },
+    /// Generate n-ary operations (for more than 2 operands)
+    NAryOps {
+        partition_idx: usize,
+        operands: Vec<Expression>,
+        op_idx: usize, // 0=Add, 1=Mul (only commutative ops make sense for n-ary)
+    },
+    /// Initialize binary operations for a partition with specific number of blocks
+    InitBinary {
+        num_blocks: usize,
+        partition_idx: usize,
+    },
     /// Initialize nth root operations for a partition
     InitNthRoot { partition_idx: usize },
     /// Initialize negation operations
@@ -183,49 +192,128 @@ impl Iterator for ExpressionIterator {
                     if let Ok(num) = digits_to_number(&self.digits, item.start, item.end) {
                         // Queue up binary operations if length >= 2
                         if length >= 2 {
-                            self.work_queue.push_back(WorkItem {
-                                start: item.start,
-                                end: item.end,
-                                state: GenerationState::InitBinary { partition_idx: 0 },
-                            });
+                            // Try different numbers of blocks, starting with 2
+                            for num_blocks in 2..=std::cmp::min(length, 7) {
+                                self.work_queue.push_back(WorkItem {
+                                    start: item.start,
+                                    end: item.end,
+                                    state: GenerationState::InitBinary {
+                                        num_blocks,
+                                        partition_idx: 0,
+                                    },
+                                });
+                            }
                         }
                         return Some(Expression::Number(num));
                     }
                 }
 
-                GenerationState::InitBinary { partition_idx } => {
-                    let partitions = generate_partitions(item.start, item.end, 2);
+                GenerationState::InitBinary {
+                    num_blocks,
+                    partition_idx,
+                } => {
+                    let partitions = generate_partitions(item.start, item.end, num_blocks);
                     if let Some(partition) = partitions.get(partition_idx) {
-                        if let (Some(&(start1, end1)), Some(&(start2, end2))) =
-                            (partition.first(), partition.get(1))
-                        {
-                            // Get expressions for left and right parts
-                            let left_exprs = if end1 - start1 <= 2 {
-                                self.get_small_expressions(start1, end1)
-                            } else {
-                                // For larger expressions, we'll generate them on demand
-                                // This is a simplified approach - in a full implementation,
-                                // we'd need a more sophisticated lazy evaluation system
-                                vec![]
-                            };
+                        if num_blocks == 2 {
+                            // Handle binary operations
+                            if let (Some(&(start1, end1)), Some(&(start2, end2))) =
+                                (partition.first(), partition.get(1))
+                            {
+                                // Get expressions for left and right parts
+                                let left_exprs = if end1 - start1 <= 2 {
+                                    self.get_small_expressions(start1, end1)
+                                } else {
+                                    // For larger ranges, generate a single base number expression
+                                    // The recursive partitioning will be handled by separate work items
+                                    if let Ok(num) = digits_to_number(&self.digits, start1, end1) {
+                                        vec![Expression::Number(num)]
+                                    } else {
+                                        vec![]
+                                    }
+                                };
 
-                            let right_exprs = if end2 - start2 <= 2 {
-                                self.get_small_expressions(start2, end2)
-                            } else {
-                                vec![]
-                            };
+                                let right_exprs = if end2 - start2 <= 2 {
+                                    self.get_small_expressions(start2, end2)
+                                } else {
+                                    // For larger ranges, generate a single base number expression
+                                    if let Ok(num) = digits_to_number(&self.digits, start2, end2) {
+                                        vec![Expression::Number(num)]
+                                    } else {
+                                        vec![]
+                                    }
+                                };
 
-                            if !left_exprs.is_empty() && !right_exprs.is_empty() {
-                                // Queue binary operations
+                                if !left_exprs.is_empty() && !right_exprs.is_empty() {
+                                    // Queue binary operations
+                                    self.work_queue.push_back(WorkItem {
+                                        start: item.start,
+                                        end: item.end,
+                                        state: GenerationState::BinaryOps {
+                                            partition_idx,
+                                            left_exprs,
+                                            right_exprs,
+                                            left_idx: 0,
+                                            right_idx: 0,
+                                            op_idx: 0,
+                                        },
+                                    });
+                                }
+
+                                // Also queue work items for the left and right parts if they're large
+                                if end1 - start1 > 2 {
+                                    let sub_length = end1 - start1;
+                                    for sub_blocks in 2..=std::cmp::min(sub_length, 7) {
+                                        self.work_queue.push_back(WorkItem {
+                                            start: start1,
+                                            end: end1,
+                                            state: GenerationState::InitBinary {
+                                                num_blocks: sub_blocks,
+                                                partition_idx: 0,
+                                            },
+                                        });
+                                    }
+                                }
+                                if end2 - start2 > 2 {
+                                    let sub_length = end2 - start2;
+                                    for sub_blocks in 2..=std::cmp::min(sub_length, 7) {
+                                        self.work_queue.push_back(WorkItem {
+                                            start: start2,
+                                            end: end2,
+                                            state: GenerationState::InitBinary {
+                                                num_blocks: sub_blocks,
+                                                partition_idx: 0,
+                                            },
+                                        });
+                                    }
+                                }
+                            }
+                        } else {
+                            // Handle n-ary operations (num_blocks > 2)
+                            let mut operands = Vec::new();
+                            let mut all_single_digits = true;
+
+                            // Collect operands from all blocks in the partition
+                            for &(start_i, end_i) in partition {
+                                if end_i - start_i == 1 {
+                                    // Single digit - convert directly to number
+                                    if let Ok(num) = digits_to_number(&self.digits, start_i, end_i)
+                                    {
+                                        operands.push(Expression::Number(num));
+                                    }
+                                } else {
+                                    all_single_digits = false;
+                                    break;
+                                }
+                            }
+
+                            // Only generate n-ary operations if all operands are single digits
+                            if all_single_digits && operands.len() == num_blocks {
                                 self.work_queue.push_back(WorkItem {
                                     start: item.start,
                                     end: item.end,
-                                    state: GenerationState::BinaryOps {
+                                    state: GenerationState::NAryOps {
                                         partition_idx,
-                                        left_exprs,
-                                        right_exprs,
-                                        left_idx: 0,
-                                        right_idx: 0,
+                                        operands,
                                         op_idx: 0,
                                     },
                                 });
@@ -237,6 +325,7 @@ impl Iterator for ExpressionIterator {
                             start: item.start,
                             end: item.end,
                             state: GenerationState::InitBinary {
+                                num_blocks,
                                 partition_idx: partition_idx + 1,
                             },
                         });
@@ -302,6 +391,41 @@ impl Iterator for ExpressionIterator {
                         }
 
                         return Some(expr);
+                    }
+                }
+
+                GenerationState::NAryOps {
+                    partition_idx,
+                    operands,
+                    op_idx,
+                } => {
+                    if op_idx == 0 {
+                        // N-ary addition: sum all operands
+                        let mut result = operands[0].clone();
+                        for operand in operands.iter().skip(1) {
+                            result = Expression::Add(Box::new(result), Box::new(operand.clone()));
+                        }
+
+                        // Queue next operation type
+                        self.work_queue.push_back(WorkItem {
+                            start: item.start,
+                            end: item.end,
+                            state: GenerationState::NAryOps {
+                                partition_idx,
+                                operands,
+                                op_idx: 1,
+                            },
+                        });
+
+                        return Some(result);
+                    } else if op_idx == 1 {
+                        // N-ary multiplication: multiply all operands
+                        let mut result = operands[0].clone();
+                        for operand in operands.iter().skip(1) {
+                            result = Expression::Mul(Box::new(result), Box::new(operand.clone()));
+                        }
+
+                        return Some(result);
                     }
                 }
 
