@@ -576,4 +576,71 @@ mod tests {
                 .any(|e| matches!(e, Expression::Number(n) if (*n - 12.0).abs() < 1e-9))
         );
     }
+
+    #[test]
+    fn test_seven_twos_equals_fourteen() {
+        // Test that "2222222" can produce 14 via 2+2+2+2+2+2+2
+        let solver = ExpressionSolver::new();
+        let result = solver.find_expression("2222222", 14.0);
+
+        assert!(result.is_some(), "Should find an expression that equals 14");
+
+        if let Some(expr) = result {
+            assert!(
+                expr.evaluate().is_ok(),
+                "Expression should evaluate successfully"
+            );
+            let value = if let Ok(v) = expr.evaluate() {
+                v
+            } else {
+                return;
+            };
+            assert!(
+                (value - 14.0).abs() < 1e-9,
+                "Expression should evaluate to 14, got {}",
+                value
+            );
+
+            // The expression should be some form of addition of seven 2's
+            let expr_str = format!("{}", expr);
+            println!("Found expression: {}", expr_str);
+
+            // Count the number of 2's in the expression - should be 7
+            let two_count = expr_str.matches('2').count();
+            assert_eq!(
+                two_count, 7,
+                "Expression should contain exactly 7 twos, found {} in: {}",
+                two_count, expr_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_simple_addition_case() {
+        // Test a simpler case first: "222" should be able to produce 6 via 2+2+2
+        let solver = ExpressionSolver::new();
+        let result = solver.find_expression("222", 6.0);
+
+        assert!(result.is_some(), "Should find an expression that equals 6");
+
+        if let Some(expr) = result {
+            assert!(
+                expr.evaluate().is_ok(),
+                "Expression should evaluate successfully"
+            );
+            let value = if let Ok(v) = expr.evaluate() {
+                v
+            } else {
+                return;
+            };
+            assert!(
+                (value - 6.0).abs() < 1e-9,
+                "Expression should evaluate to 6, got {}",
+                value
+            );
+
+            let expr_str = format!("{}", expr);
+            println!("Found expression for 222->6: {}", expr_str);
+        }
+    }
 }
