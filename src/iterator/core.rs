@@ -1,9 +1,10 @@
 use crate::expression::Expression;
 use crate::utils::{digits_to_number, generate_partitions};
 use log::{info, warn};
-use std::collections::{HashMap, VecDeque};
+use rayon::prelude::*;
+use std::collections::VecDeque;
 
-use super::constants::{MAX_CACHE_SIZE, MAX_WORK_QUEUE_SIZE, SMALL_RANGE_THRESHOLD};
+use super::constants::{MAX_WORK_QUEUE_SIZE, SMALL_RANGE_THRESHOLD};
 use super::generator::ExpressionGenerator;
 use super::state::ExpressionIteratorState;
 use super::types::{GenerationState, WorkItem};
@@ -26,7 +27,6 @@ struct BinaryOpState {
 pub struct ExpressionIterator {
     work_queue: VecDeque<WorkItem>,
     digits: String,
-    small_cache: HashMap<(usize, usize), Vec<Expression>>, // Cache for small ranges only
 }
 
 impl ExpressionIterator {
@@ -74,9 +74,9 @@ impl ExpressionIterator {
 
         let (start, end) = range;
 
-        // For small ranges, use cached expressions
+        // For small ranges, generate expressions on the fly (no caching)
         if self.is_small_range(start, end) {
-            let expressions = self.get_small_expressions(start, end);
+            let expressions = self.build_small_expressions(start, end);
             if let Some(expr) = expressions.get(state.position) {
                 let expr = expr.clone();
                 state.advance();
@@ -115,20 +115,11 @@ impl ExpressionIterator {
             len
         );
 
-        Self {
-            work_queue,
-            digits,
-            small_cache: HashMap::new(),
-        }
+        Self { work_queue, digits }
     }
 
-    /// Get expressions for small ranges with caching
-    fn get_small_expressions(&mut self, start: usize, end: usize) -> Vec<Expression> {
-        let key = (start, end);
-        if let Some(cached) = self.small_cache.get(&key) {
-            return cached.clone();
-        }
-
+    /// Build expressions for small ranges (no caching)
+    fn build_small_expressions(&self, start: usize, end: usize) -> Vec<Expression> {
         let mut expressions = Vec::new();
 
         // Base case: single number
@@ -142,77 +133,97 @@ impl ExpressionIterator {
             self.add_negation_expressions(&mut expressions);
         }
 
-        self.cache_expressions(key, &expressions);
         expressions
     }
 
     /// Generate expressions from partitions for small ranges
     fn generate_small_partitioned_expressions(
-        &mut self,
+        &self,
         start: usize,
         end: usize,
         expressions: &mut Vec<Expression>,
     ) {
         let length = end - start;
-        for num_blocks in 2..=std::cmp::min(length, 4) {
-            let partitions = generate_partitions(start, end, num_blocks);
+        let max_blocks = std::cmp::min(length, 4);
 
-            for partition in &partitions {
-                if num_blocks == 2 {
-                    self.generate_binary_expressions_small(partition, expressions);
-                } else {
-                    self.generate_nary_expressions_small(partition, expressions);
-                }
-            }
-        }
+        let mut parallel_results: Vec<Expression> = (2..=max_blocks)
+            .into_par_iter()
+            .map(|num_blocks| {
+                let partitions = generate_partitions(start, end, num_blocks);
+                partitions
+                    .into_par_iter()
+                    .map(|partition| {
+                        if num_blocks == 2 {
+                            self.generate_binary_expressions_small_partition(&partition)
+                        } else {
+                            self.generate_nary_expressions_small_partition(&partition)
+                        }
+                    })
+                    .reduce(Vec::new, |mut acc, mut v| {
+                        acc.append(&mut v);
+                        acc
+                    })
+            })
+            .reduce(Vec::new, |mut acc, mut v| {
+                acc.append(&mut v);
+                acc
+            });
+
+        expressions.append(&mut parallel_results);
     }
 
     /// Generate binary expressions for small ranges
-    fn generate_binary_expressions_small(
-        &mut self,
+    fn generate_binary_expressions_small_partition(
+        &self,
         partition: &[(usize, usize)],
-        expressions: &mut Vec<Expression>,
-    ) {
+    ) -> Vec<Expression> {
+        let mut out = Vec::new();
         if let (Some(&(start1, end1)), Some(&(start2, end2))) =
             (partition.first(), partition.get(1))
         {
             let left_exprs = self.get_sub_expressions(start1, end1);
             let right_exprs = self.get_sub_expressions(start2, end2);
 
-            for left in &left_exprs {
-                for right in &right_exprs {
-                    // Generate all binary operations
-                    expressions.extend(ExpressionGenerator::generate_binary_ops(left, right));
+            let mut results: Vec<Expression> = left_exprs
+                .par_iter()
+                .flat_map_iter(|left| {
+                    right_exprs.iter().flat_map(move |right| {
+                        let mut local = ExpressionGenerator::generate_binary_ops(left, right);
+                        if let Some(nth_root) = ExpressionGenerator::generate_nth_root(left, right)
+                        {
+                            local.push(nth_root);
+                        }
+                        local
+                    })
+                })
+                .collect();
 
-                    // Generate nth root if applicable
-                    if let Some(nth_root) = ExpressionGenerator::generate_nth_root(left, right) {
-                        expressions.push(nth_root);
-                    }
-                }
-            }
+            out.append(&mut results);
         }
+        out
     }
 
     /// Generate n-ary expressions for small ranges
-    fn generate_nary_expressions_small(
-        &mut self,
+    fn generate_nary_expressions_small_partition(
+        &self,
         partition: &[(usize, usize)],
-        expressions: &mut Vec<Expression>,
-    ) {
+    ) -> Vec<Expression> {
         let mut all_operands = Vec::new();
         for &(start_i, end_i) in partition {
             let sub_exprs = self.get_sub_expressions(start_i, end_i);
             if sub_exprs.is_empty() {
-                return; // Invalid partition
+                return Vec::new();
             }
             all_operands.push(sub_exprs);
         }
 
-        self.generate_nary_combinations_small(expressions, &all_operands, 0, Vec::new());
+        let mut results = Vec::new();
+        self.generate_nary_combinations_small(&mut results, &all_operands, 0, Vec::new());
+        results
     }
 
     /// Get sub-expressions for a range (single number or recursive call)
-    fn get_sub_expressions(&mut self, start: usize, end: usize) -> Vec<Expression> {
+    fn get_sub_expressions(&self, start: usize, end: usize) -> Vec<Expression> {
         if end - start == 1 {
             if let Ok(num) = digits_to_number(&self.digits, start, end) {
                 vec![Expression::Number(num)]
@@ -220,7 +231,7 @@ impl ExpressionIterator {
                 vec![]
             }
         } else {
-            self.get_small_expressions(start, end)
+            self.build_small_expressions(start, end)
         }
     }
 
@@ -238,14 +249,7 @@ impl ExpressionIterator {
         }
     }
 
-    /// Cache expressions with size limit management
-    fn cache_expressions(&mut self, key: (usize, usize), expressions: &[Expression]) {
-        if self.small_cache.len() < MAX_CACHE_SIZE {
-            self.small_cache.insert(key, expressions.to_vec());
-        } else if self.small_cache.len() > MAX_CACHE_SIZE * 2 {
-            self.small_cache.clear();
-        }
-    }
+    // Caching removed for maximal parallel scalability
 
     /// Generate all combinations of n-ary operations for small ranges
     fn generate_nary_combinations_small(
