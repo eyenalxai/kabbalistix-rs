@@ -1,7 +1,9 @@
 use crate::expression::{Expression, ExpressionError};
 use crate::utils::{UtilsError, digits_to_number, generate_partitions};
 use log::{debug, info};
-use std::collections::HashMap;
+use moka::sync::Cache;
+use rayon::prelude::*;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 /// Errors that can occur during solving
@@ -13,8 +15,8 @@ pub enum SolverError {
     UtilsError(#[from] UtilsError),
 }
 
-/// Memoization cache for expressions
-type ExprCache = HashMap<(usize, usize), Vec<Expression>>;
+/// Memoization cache for expressions using Moka for thread-safe concurrent access
+type ExprCache = Cache<(usize, usize), Vec<Expression>>;
 
 // Default configuration constants
 const MAX_ROOT_DEGREE: f64 = 10.0;
@@ -36,31 +38,55 @@ impl ExpressionSolver {
 
         debug!("Generated {} expressions to evaluate", total_expressions);
 
-        let mut evaluated_count = 0;
-        let mut valid_count = 0;
+        // Use Arc<Mutex<_>> to track counts across threads
+        let evaluated_count = Arc::new(Mutex::new(0usize));
+        let valid_count = Arc::new(Mutex::new(0usize));
 
-        for expr in all_expressions {
-            evaluated_count += 1;
+        // Use parallel iterator to find matching expression
+        let result = all_expressions.into_par_iter().find_map_any(|expr| {
+            // Update evaluated count
+            {
+                let mut count = evaluated_count.lock().ok()?;
+                *count += 1;
+            }
+
             if let Ok(value) = expr.evaluate() {
-                valid_count += 1;
+                // Update valid count
+                {
+                    let mut count = valid_count.lock().ok()?;
+                    *count += 1;
+                }
+
                 debug!("Expression {} evaluates to {}", expr, value);
                 if (value - target).abs() < EPSILON {
-                    info!(
-                        "Found match after evaluating {} expressions ({} valid)",
-                        evaluated_count, valid_count
-                    );
                     return Some(expr);
                 }
             } else {
                 debug!("Expression {} failed to evaluate", expr);
             }
-        }
+            None
+        });
 
-        info!(
-            "No match found. Evaluated {} expressions ({} valid)",
-            evaluated_count, valid_count
-        );
-        None
+        // Get final counts for logging
+        let final_evaluated = evaluated_count.lock().map(|c| *c).unwrap_or(0);
+        let final_valid = valid_count.lock().map(|c| *c).unwrap_or(0);
+
+        match result {
+            Some(expr) => {
+                info!(
+                    "Found match after evaluating {} expressions ({} valid)",
+                    final_evaluated, final_valid
+                );
+                Some(expr)
+            }
+            None => {
+                info!(
+                    "No match found. Evaluated {} expressions ({} valid)",
+                    final_evaluated, final_valid
+                );
+                None
+            }
+        }
     }
 
     /// Generate all possible expressions from a digit string with memoization
@@ -69,7 +95,7 @@ impl ExpressionSolver {
         digits: &str,
         start: usize,
         end: usize,
-        cache: &mut ExprCache,
+        cache: &ExprCache,
     ) -> Vec<Expression> {
         if start >= end || start >= digits.len() || end > digits.len() {
             return Vec::new();
@@ -77,7 +103,7 @@ impl ExpressionSolver {
 
         // Check cache first
         if let Some(cached) = cache.get(&(start, end)) {
-            return cached.clone();
+            return cached;
         }
 
         let length = end - start;
@@ -105,7 +131,7 @@ impl ExpressionSolver {
         digits: &str,
         start: usize,
         end: usize,
-        cache: &mut ExprCache,
+        cache: &ExprCache,
         expressions: &mut Vec<Expression>,
     ) {
         for partition in generate_partitions(start, end, 2) {
@@ -115,17 +141,23 @@ impl ExpressionSolver {
                 let left_exprs = self.generate_expressions_memo(digits, start1, end1, cache);
                 let right_exprs = self.generate_expressions_memo(digits, start2, end2, cache);
 
-                for left in &left_exprs {
-                    for right in &right_exprs {
-                        expressions.extend([
-                            Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
-                        ]);
-                    }
-                }
+                // Use parallel processing for the cartesian product of expressions
+                let new_expressions: Vec<Expression> = left_exprs
+                    .par_iter()
+                    .flat_map(|left| {
+                        right_exprs.par_iter().flat_map(move |right| {
+                            [
+                                Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
+                            ]
+                        })
+                    })
+                    .collect();
+
+                expressions.extend(new_expressions);
             }
         }
     }
@@ -136,7 +168,7 @@ impl ExpressionSolver {
         digits: &str,
         start: usize,
         end: usize,
-        cache: &mut ExprCache,
+        cache: &ExprCache,
         expressions: &mut Vec<Expression>,
     ) {
         for partition in generate_partitions(start, end, 2) {
@@ -172,8 +204,10 @@ impl ExpressionSolver {
 
     /// Wrapper function that creates cache and calls memoized version
     fn generate_expressions(&self, digits: &str, start: usize, end: usize) -> Vec<Expression> {
-        let mut cache = HashMap::new();
-        self.generate_expressions_memo(digits, start, end, &mut cache)
+        let cache = Cache::builder()
+            .max_capacity(10_000) // Limit cache size to prevent excessive memory usage
+            .build();
+        self.generate_expressions_memo(digits, start, end, &cache)
     }
 }
 

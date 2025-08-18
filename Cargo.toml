@@ -9,3 +9,5 @@ anyhow = "1.0"
 clap = { version = "4.0", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
+rayon = "1.8"
+moka = { version = "0.12", features = ["sync"] }
