@@ -76,6 +76,29 @@ impl fmt::Display for Expression {
                     }
                 }
                 Expression::Mul(l, r) => {
+                    // Elide identity element 1: 1 * x => x, x * 1 => x
+                    if let Expression::Number(n) = l.as_ref() {
+                        if *n == 1.0 {
+                            return fmt_expression(f, r);
+                        }
+                        // Prefer unary minus form for -1 * x => -x
+                        if *n == -1.0 {
+                            let need = !matches!(r.as_ref(), Expression::Number(_));
+                            write!(f, "-")?;
+                            return write_with_parens(f, r, need);
+                        }
+                    }
+                    if let Expression::Number(n) = r.as_ref() {
+                        if *n == 1.0 {
+                            return fmt_expression(f, l);
+                        }
+                        // Prefer unary minus form for x * -1 => -x
+                        if *n == -1.0 {
+                            let need = !matches!(l.as_ref(), Expression::Number(_));
+                            write!(f, "-")?;
+                            return write_with_parens(f, l, need);
+                        }
+                    }
                     let lp = precedence(l);
                     let rp = precedence(r);
                     // Parenthesize children with lower precedence (add/sub)
