@@ -6,6 +6,42 @@ use std::collections::{HashMap, VecDeque};
 
 // Default configuration constants
 const MAX_ROOT_DEGREE: f64 = 10.0;
+const MAX_CACHE_SIZE: usize = 1000; // Limit cache size to prevent unbounded growth
+
+/// Lightweight state for generating expressions from a range without storing them
+#[derive(Debug, Clone)]
+pub struct ExpressionIteratorState {
+    /// Current complexity level being generated (1=base numbers, 2=binary ops, etc.)
+    complexity: usize,
+    /// Position within current complexity level
+    position: usize,
+    /// Whether this iterator is exhausted
+    exhausted: bool,
+}
+
+impl ExpressionIteratorState {
+    fn new() -> Self {
+        Self {
+            complexity: 1,
+            position: 0,
+            exhausted: false,
+        }
+    }
+
+    fn advance(&mut self) {
+        self.position += 1;
+    }
+
+    #[allow(dead_code)]
+    fn next_complexity(&mut self) {
+        self.complexity += 1;
+        self.position = 0;
+    }
+
+    fn mark_exhausted(&mut self) {
+        self.exhausted = true;
+    }
+}
 
 /// Iterative expression generator that yields expressions one at a time without storing them
 #[derive(Debug, Clone)]
@@ -29,10 +65,11 @@ pub enum GenerationState {
     /// Generate binary operations for a specific partition
     BinaryOps {
         partition_idx: usize,
-        left_exprs: Vec<Expression>,
-        right_exprs: Vec<Expression>,
-        left_idx: usize,
-        right_idx: usize,
+        left_range: (usize, usize),
+        right_range: (usize, usize),
+        left_iterator_state: ExpressionIteratorState,
+        right_iterator_state: Option<ExpressionIteratorState>,
+        current_left: Option<Expression>,
         op_idx: usize, // 0=Add, 1=Sub, 2=Mul, 3=Div, 4=Pow
     },
 
@@ -40,18 +77,19 @@ pub enum GenerationState {
     NthRoots {
         partition_idx: usize,
         n_value: f64,
-        a_exprs: Vec<Expression>,
-        a_idx: usize,
+        a_range: (usize, usize),
+        a_iterator_state: ExpressionIteratorState,
     },
     /// Generate negation operations
     Negations {
-        base_exprs: Vec<Expression>,
-        expr_idx: usize,
+        base_range: (usize, usize),
+        base_iterator_state: ExpressionIteratorState,
+        skip_base_number: bool, // Skip the first base number
     },
     /// Generate n-ary operations (for more than 2 operands)
     NAryOps {
         partition_idx: usize,
-        operands: Vec<Expression>,
+        partition: Vec<(usize, usize)>,
         op_idx: usize, // 0=Add, 1=Mul, 2=Sub (first - rest), 3=Mixed (first - second + rest)
     },
     /// Initialize binary operations for a partition with specific number of blocks
@@ -66,6 +104,44 @@ pub enum GenerationState {
 }
 
 impl ExpressionIterator {
+    /// Generate the next expression for a given range and iterator state
+    fn generate_next_expression(
+        &mut self,
+        range: (usize, usize),
+        state: &mut ExpressionIteratorState,
+    ) -> Option<Expression> {
+        if state.exhausted {
+            return None;
+        }
+
+        let (start, end) = range;
+
+        // For small ranges, use the existing small cache method
+        if end - start <= 4 {
+            let expressions = self.get_small_expressions(start, end);
+            if let Some(expr) = expressions.get(state.position) {
+                let expr = expr.clone();
+                state.advance();
+                return Some(expr);
+            } else {
+                state.mark_exhausted();
+                return None;
+            }
+        }
+
+        // For larger ranges, generate base number only for now
+        // (This is a simplified approach - we could extend this later)
+        if state.complexity == 1 && state.position == 0 {
+            if let Ok(num) = digits_to_number(&self.digits, start, end) {
+                state.advance();
+                return Some(Expression::Number(num));
+            }
+        }
+
+        state.mark_exhausted();
+        None
+    }
+
     pub fn new(digits: String) -> Self {
         let mut work_queue = VecDeque::new();
         let len = digits.len();
@@ -221,7 +297,15 @@ impl ExpressionIterator {
             }
         }
 
-        self.small_cache.insert(key, expressions.clone());
+        // Only cache if we haven't exceeded the size limit
+        if self.small_cache.len() < MAX_CACHE_SIZE {
+            self.small_cache.insert(key, expressions.clone());
+        } else {
+            // If cache is full, occasionally clear old entries
+            if self.small_cache.len() > MAX_CACHE_SIZE * 2 {
+                self.small_cache.clear();
+            }
+        }
         expressions
     }
 
@@ -325,46 +409,20 @@ impl Iterator for ExpressionIterator {
                             if let (Some(&(start1, end1)), Some(&(start2, end2))) =
                                 (partition.first(), partition.get(1))
                             {
-                                // Get expressions for left and right parts
-                                let left_exprs = if end1 - start1 <= 4 {
-                                    // Increased from 2 to 4
-                                    self.get_small_expressions(start1, end1)
-                                } else {
-                                    // For larger ranges, generate a single base number expression
-                                    if let Ok(num) = digits_to_number(&self.digits, start1, end1) {
-                                        vec![Expression::Number(num)]
-                                    } else {
-                                        vec![]
-                                    }
-                                };
-
-                                let right_exprs = if end2 - start2 <= 4 {
-                                    // Increased from 2 to 4
-                                    self.get_small_expressions(start2, end2)
-                                } else {
-                                    // For larger ranges, generate a single base number expression
-                                    if let Ok(num) = digits_to_number(&self.digits, start2, end2) {
-                                        vec![Expression::Number(num)]
-                                    } else {
-                                        vec![]
-                                    }
-                                };
-
-                                if !left_exprs.is_empty() && !right_exprs.is_empty() {
-                                    // Queue binary operations
-                                    self.work_queue.push_back(WorkItem {
-                                        start: item.start,
-                                        end: item.end,
-                                        state: GenerationState::BinaryOps {
-                                            partition_idx,
-                                            left_exprs,
-                                            right_exprs,
-                                            left_idx: 0,
-                                            right_idx: 0,
-                                            op_idx: 0,
-                                        },
-                                    });
-                                }
+                                // Queue binary operations with range info instead of storing expressions
+                                self.work_queue.push_back(WorkItem {
+                                    start: item.start,
+                                    end: item.end,
+                                    state: GenerationState::BinaryOps {
+                                        partition_idx,
+                                        left_range: (start1, end1),
+                                        right_range: (start2, end2),
+                                        left_iterator_state: ExpressionIteratorState::new(),
+                                        right_iterator_state: None,
+                                        current_left: None,
+                                        op_idx: 0,
+                                    },
+                                });
 
                                 // Also queue work items for the left and right parts if they're large
                                 if end1 - start1 > 2 {
@@ -416,7 +474,7 @@ impl Iterator for ExpressionIterator {
                                     end: item.end,
                                     state: GenerationState::NAryOps {
                                         partition_idx,
-                                        operands,
+                                        partition: partition.clone(),
                                         op_idx: 0,
                                     },
                                 });
@@ -444,67 +502,137 @@ impl Iterator for ExpressionIterator {
 
                 GenerationState::BinaryOps {
                     partition_idx,
-                    left_exprs,
-                    right_exprs,
-                    left_idx,
-                    right_idx,
+                    left_range,
+                    right_range,
+                    mut left_iterator_state,
+                    mut right_iterator_state,
+                    mut current_left,
                     op_idx,
                 } => {
-                    if let (Some(left), Some(right)) =
-                        (left_exprs.get(left_idx), right_exprs.get(right_idx))
-                    {
-                        let expr = match op_idx {
-                            0 => Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
-                            1 => Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
-                            2 => Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
-                            3 => Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
-                            4 => Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
-                            _ => continue,
-                        };
+                    // Get current left expression if we don't have one
+                    if current_left.is_none() {
+                        current_left =
+                            self.generate_next_expression(left_range, &mut left_iterator_state);
+                        if current_left.is_none() {
+                            // Left iterator exhausted, move on
+                            continue;
+                        }
+                        // Reset right iterator for new left expression
+                        right_iterator_state = Some(ExpressionIteratorState::new());
+                    }
 
-                        // Update indices for next iteration
-                        let (next_left_idx, next_right_idx, next_op_idx) = if op_idx < 4 {
-                            (left_idx, right_idx, op_idx + 1)
-                        } else if right_idx + 1 < right_exprs.len() {
-                            (left_idx, right_idx + 1, 0)
-                        } else if left_idx + 1 < left_exprs.len() {
-                            (left_idx + 1, 0, 0)
-                        } else {
-                            // Done with this partition, don't queue anything more
-                            (left_exprs.len(), right_exprs.len(), 5)
-                        };
+                    // Get next right expression
+                    if right_iterator_state.is_none() {
+                        right_iterator_state = Some(ExpressionIteratorState::new());
+                    }
 
-                        // Queue next iteration if not done
-                        if next_left_idx < left_exprs.len()
-                            && next_right_idx < right_exprs.len()
-                            && next_op_idx <= 4
+                    if let Some(ref mut right_state) = right_iterator_state {
+                        if let Some(right) = self.generate_next_expression(right_range, right_state)
                         {
+                            if let Some(ref left) = current_left {
+                                let expr = match op_idx {
+                                    0 => Expression::Add(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ),
+                                    1 => Expression::Sub(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ),
+                                    2 => Expression::Mul(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ),
+                                    3 => Expression::Div(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ),
+                                    4 => Expression::Pow(
+                                        Box::new(left.clone()),
+                                        Box::new(right.clone()),
+                                    ),
+                                    _ => continue,
+                                };
+
+                                // Queue next iteration - advance operation or right iterator
+                                let next_op_idx = if op_idx < 4 { op_idx + 1 } else { 0 };
+                                let continue_with_same_left = if op_idx < 4 {
+                                    true
+                                } else {
+                                    // Check if right iterator has more expressions
+                                    !right_state.exhausted
+                                };
+
+                                if continue_with_same_left || !left_iterator_state.exhausted {
+                                    let next_current_left = if continue_with_same_left {
+                                        current_left.clone()
+                                    } else {
+                                        None // Will get next left expression
+                                    };
+
+                                    self.work_queue.push_back(WorkItem {
+                                        start: item.start,
+                                        end: item.end,
+                                        state: GenerationState::BinaryOps {
+                                            partition_idx,
+                                            left_range,
+                                            right_range,
+                                            left_iterator_state,
+                                            right_iterator_state: if continue_with_same_left {
+                                                right_iterator_state
+                                            } else {
+                                                Some(ExpressionIteratorState::new())
+                                            },
+                                            current_left: next_current_left,
+                                            op_idx: next_op_idx,
+                                        },
+                                    });
+                                }
+
+                                // Only return expressions that use all digits
+                                if is_full_range {
+                                    return Some(expr);
+                                }
+                            }
+                        } else {
+                            // Right iterator exhausted, get next left
                             self.work_queue.push_back(WorkItem {
                                 start: item.start,
                                 end: item.end,
                                 state: GenerationState::BinaryOps {
                                     partition_idx,
-                                    left_exprs: left_exprs.clone(),
-                                    right_exprs: right_exprs.clone(),
-                                    left_idx: next_left_idx,
-                                    right_idx: next_right_idx,
-                                    op_idx: next_op_idx,
+                                    left_range,
+                                    right_range,
+                                    left_iterator_state,
+                                    right_iterator_state: None,
+                                    current_left: None,
+                                    op_idx: 0,
                                 },
                             });
-                        }
-
-                        // Only return expressions that use all digits
-                        if is_full_range {
-                            return Some(expr);
                         }
                     }
                 }
 
                 GenerationState::NAryOps {
                     partition_idx,
-                    operands,
+                    partition,
                     op_idx,
                 } => {
+                    // Generate operands on-demand from partition
+                    let mut operands = Vec::new();
+                    for &(start_i, end_i) in &partition {
+                        if let Ok(num) = digits_to_number(&self.digits, start_i, end_i) {
+                            operands.push(Expression::Number(num));
+                        } else {
+                            // Invalid operand, skip this n-ary operation
+                            continue;
+                        }
+                    }
+
+                    if operands.is_empty() {
+                        continue;
+                    }
+
                     if op_idx == 0 {
                         // N-ary addition: sum all operands
                         if let Some(first) = operands.first() {
@@ -520,7 +648,7 @@ impl Iterator for ExpressionIterator {
                                 end: item.end,
                                 state: GenerationState::NAryOps {
                                     partition_idx,
-                                    operands: operands.clone(),
+                                    partition: partition.clone(),
                                     op_idx: 1,
                                 },
                             });
@@ -545,7 +673,7 @@ impl Iterator for ExpressionIterator {
                                 end: item.end,
                                 state: GenerationState::NAryOps {
                                     partition_idx,
-                                    operands: operands.clone(),
+                                    partition: partition.clone(),
                                     op_idx: 2,
                                 },
                             });
@@ -571,7 +699,7 @@ impl Iterator for ExpressionIterator {
                                     end: item.end,
                                     state: GenerationState::NAryOps {
                                         partition_idx,
-                                        operands: operands.clone(),
+                                        partition: partition.clone(),
                                         op_idx: 3,
                                     },
                                 });
@@ -616,24 +744,16 @@ impl Iterator for ExpressionIterator {
                             if let Ok(n_num) = digits_to_number(&self.digits, start1, end1) {
                                 if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= MAX_ROOT_DEGREE
                                 {
-                                    let a_exprs = if end2 - start2 <= 2 {
-                                        self.get_small_expressions(start2, end2)
-                                    } else {
-                                        vec![]
-                                    };
-
-                                    if !a_exprs.is_empty() {
-                                        self.work_queue.push_back(WorkItem {
-                                            start: item.start,
-                                            end: item.end,
-                                            state: GenerationState::NthRoots {
-                                                partition_idx,
-                                                n_value: n_num,
-                                                a_exprs,
-                                                a_idx: 0,
-                                            },
-                                        });
-                                    }
+                                    self.work_queue.push_back(WorkItem {
+                                        start: item.start,
+                                        end: item.end,
+                                        state: GenerationState::NthRoots {
+                                            partition_idx,
+                                            n_value: n_num,
+                                            a_range: (start2, end2),
+                                            a_iterator_state: ExpressionIteratorState::new(),
+                                        },
+                                    });
                                 }
                             }
                         }
@@ -659,81 +779,97 @@ impl Iterator for ExpressionIterator {
                 GenerationState::NthRoots {
                     partition_idx,
                     n_value,
-                    a_exprs,
-                    a_idx,
+                    a_range,
+                    mut a_iterator_state,
                 } => {
-                    if let Some(a_expr) = a_exprs.get(a_idx) {
+                    if let Some(a_expr) =
+                        self.generate_next_expression(a_range, &mut a_iterator_state)
+                    {
                         let n_expr = Expression::Number(n_value);
 
-                        // Queue next iteration
-                        if a_idx + 1 < a_exprs.len() {
+                        // Queue next iteration if there are more expressions
+                        if !a_iterator_state.exhausted {
                             self.work_queue.push_back(WorkItem {
                                 start: item.start,
                                 end: item.end,
                                 state: GenerationState::NthRoots {
                                     partition_idx,
                                     n_value,
-                                    a_exprs: a_exprs.clone(),
-                                    a_idx: a_idx + 1,
+                                    a_range,
+                                    a_iterator_state,
                                 },
                             });
                         }
 
                         // Only return expressions that use all digits
                         if is_full_range {
-                            return Some(Expression::NthRoot(
-                                Box::new(n_expr),
-                                Box::new(a_expr.clone()),
-                            ));
+                            return Some(Expression::NthRoot(Box::new(n_expr), Box::new(a_expr)));
                         }
                     }
                 }
 
                 GenerationState::InitNegations => {
-                    // Get base expressions to negate (simplified - only from small cache for now)
-                    let base_exprs = if length <= 2 {
-                        let mut all_exprs = self.get_small_expressions(item.start, item.end);
-                        // Remove the base number and already negated expressions
-                        all_exprs.retain(|expr| {
-                            !matches!(expr, Expression::Number(_) | Expression::Neg(_))
-                        });
-                        all_exprs
-                    } else {
-                        vec![]
-                    };
-
-                    if !base_exprs.is_empty() {
+                    // Only negate expressions for small ranges to keep it simple
+                    if length <= 4 {
                         self.work_queue.push_back(WorkItem {
                             start: item.start,
                             end: item.end,
                             state: GenerationState::Negations {
-                                base_exprs,
-                                expr_idx: 0,
+                                base_range: (item.start, item.end),
+                                base_iterator_state: ExpressionIteratorState::new(),
+                                skip_base_number: true,
                             },
                         });
                     }
                 }
 
                 GenerationState::Negations {
-                    base_exprs,
-                    expr_idx,
+                    base_range,
+                    mut base_iterator_state,
+                    skip_base_number,
                 } => {
-                    if let Some(expr) = base_exprs.get(expr_idx) {
-                        // Queue next iteration
-                        if expr_idx + 1 < base_exprs.len() {
+                    // Skip the base number if requested
+                    if skip_base_number {
+                        // Skip the first expression (base number)
+                        let _ = self.generate_next_expression(base_range, &mut base_iterator_state);
+                    }
+
+                    if let Some(expr) =
+                        self.generate_next_expression(base_range, &mut base_iterator_state)
+                    {
+                        // Skip already negated expressions
+                        if matches!(expr, Expression::Neg(_)) {
+                            // Queue next iteration without returning anything
+                            if !base_iterator_state.exhausted {
+                                self.work_queue.push_back(WorkItem {
+                                    start: item.start,
+                                    end: item.end,
+                                    state: GenerationState::Negations {
+                                        base_range,
+                                        base_iterator_state,
+                                        skip_base_number: false,
+                                    },
+                                });
+                            }
+                            continue;
+                        }
+
+                        // Queue next iteration if there are more expressions
+                        if !base_iterator_state.exhausted {
                             self.work_queue.push_back(WorkItem {
                                 start: item.start,
                                 end: item.end,
                                 state: GenerationState::Negations {
-                                    base_exprs: base_exprs.clone(),
-                                    expr_idx: expr_idx + 1,
+                                    base_range,
+                                    base_iterator_state,
+                                    skip_base_number: false,
                                 },
                             });
                         }
 
                         // Only return expressions that use all digits
                         if is_full_range {
-                            return Some(Expression::Neg(Box::new(expr.clone())));
+                            return Some(Expression::Neg(Box::new(expr)));
                         }
                     }
                 }
