@@ -43,4 +43,3 @@ rc_mutex = "deny"
 
 [lints.rust]
 dead_code = "deny"
-incomplete_features = "allow"
