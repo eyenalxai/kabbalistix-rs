@@ -401,31 +401,36 @@ impl Iterator for ExpressionIterator {
                 } => {
                     if op_idx == 0 {
                         // N-ary addition: sum all operands
-                        let mut result = operands[0].clone();
-                        for operand in operands.iter().skip(1) {
-                            result = Expression::Add(Box::new(result), Box::new(operand.clone()));
+                        if let Some(first) = operands.first() {
+                            let mut result = first.clone();
+                            for operand in operands.iter().skip(1) {
+                                result =
+                                    Expression::Add(Box::new(result), Box::new(operand.clone()));
+                            }
+
+                            // Queue next operation type
+                            self.work_queue.push_back(WorkItem {
+                                start: item.start,
+                                end: item.end,
+                                state: GenerationState::NAryOps {
+                                    partition_idx,
+                                    operands,
+                                    op_idx: 1,
+                                },
+                            });
+
+                            return Some(result);
                         }
-
-                        // Queue next operation type
-                        self.work_queue.push_back(WorkItem {
-                            start: item.start,
-                            end: item.end,
-                            state: GenerationState::NAryOps {
-                                partition_idx,
-                                operands,
-                                op_idx: 1,
-                            },
-                        });
-
-                        return Some(result);
                     } else if op_idx == 1 {
                         // N-ary multiplication: multiply all operands
-                        let mut result = operands[0].clone();
-                        for operand in operands.iter().skip(1) {
-                            result = Expression::Mul(Box::new(result), Box::new(operand.clone()));
+                        if let Some(first) = operands.first() {
+                            let mut result = first.clone();
+                            for operand in operands.iter().skip(1) {
+                                result =
+                                    Expression::Mul(Box::new(result), Box::new(operand.clone()));
+                            }
+                            return Some(result);
                         }
-
-                        return Some(result);
                     }
                 }
 
