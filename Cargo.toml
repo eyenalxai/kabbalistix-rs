@@ -21,11 +21,11 @@ unwrap_or_default = "deny"
 get_unwrap = "deny"
 map_unwrap_or = "deny"
 unnecessary_unwrap = "deny"
-exit = "deny"
 mem_forget = "deny"
-dead_code = "deny"
+
 only_used_in_recursion = "deny"
 allow_attributes = "deny"
+
 
 # Documentation lints
 missing_errors_doc = "deny"
@@ -40,3 +40,6 @@ unreachable = "deny"
 clone_on_ref_ptr = "deny"
 mutex_atomic = "deny"
 rc_mutex = "deny"
+
+[lints.rust]
+dead_code = "deny"
