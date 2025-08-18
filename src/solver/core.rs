@@ -113,7 +113,7 @@ impl ExpressionSolver {
         }
 
         let length = end - start;
-        if length >= 2 && length <= SMALL_RANGE_THRESHOLD {
+        if (2..=SMALL_RANGE_THRESHOLD).contains(&length) {
             self.generate_small_partitioned_expressions(digits, start, end, &mut expressions);
 
             // add negations of composite expressions (skip base number and already negated)
