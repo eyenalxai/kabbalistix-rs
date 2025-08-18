@@ -10,3 +10,30 @@ clap = { version = "4.0", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
 rayon = "1.8"
+
+[lints.clippy]
+# Safety and correctness lints
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+unwrap_or_default = "deny"
+get_unwrap = "deny"
+map_unwrap_or = "deny"
+unnecessary_unwrap = "deny"
+exit = "deny"
+mem_forget = "deny"
+
+# Documentation lints
+missing_errors_doc = "deny"
+missing_panics_doc = "deny"
+
+# Development lints
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+# Concurrency lints
+clone_on_ref_ptr = "deny"
+mutex_atomic = "deny"
+rc_mutex = "deny"
