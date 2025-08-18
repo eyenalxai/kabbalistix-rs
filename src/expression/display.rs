@@ -15,6 +15,19 @@ impl fmt::Display for Expression {
             }
         }
 
+        fn leading_is_unary_minus(expr: &Expression) -> bool {
+            match expr {
+                Expression::Neg(_) => true,
+                Expression::Number(n) => *n < 0.0,
+                Expression::Add(l, _)
+                | Expression::Sub(l, _)
+                | Expression::Mul(l, _)
+                | Expression::Div(l, _)
+                | Expression::Pow(l, _) => leading_is_unary_minus(l),
+                Expression::NthRoot(_, a) => leading_is_unary_minus(a),
+            }
+        }
+
         fn write_with_parens(
             f: &mut fmt::Formatter,
             expr: &Expression,
@@ -38,10 +51,15 @@ impl fmt::Display for Expression {
                         let lp = precedence(l);
                         let need_l = lp < 1;
                         write_with_parens(f, l, need_l)?;
-                        write!(f, " - ")?;
-                        // Right side of subtraction may need parens
                         let rp = precedence(inner);
                         let need_r = rp <= 1;
+                        // If right will be parenthesized and starts with '-', elide space before '('
+                        if need_r && leading_is_unary_minus(inner) {
+                            write!(f, " -")?;
+                        } else {
+                            write!(f, " - ")?;
+                        }
+                        // Right side of subtraction may need parens
                         write_with_parens(f, inner, need_r)
                     } else {
                         let lp = precedence(l);
@@ -71,7 +89,12 @@ impl fmt::Display for Expression {
                         // Right child requires parens for same or lower precedence to preserve order
                         let need_r = rp <= 1;
                         write_with_parens(f, l, need_l)?;
-                        write!(f, " - ")?;
+                        // If right will be parenthesized and starts with '-', elide space before '('
+                        if need_r && leading_is_unary_minus(r) {
+                            write!(f, " -")?;
+                        } else {
+                            write!(f, " - ")?;
+                        }
                         write_with_parens(f, r, need_r)
                     }
                 }
