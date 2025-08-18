@@ -77,21 +77,12 @@ impl ExpressionSolver {
         if remaining_blocks == 1 {
             let mut partition = current_partition;
             partition.push((start, end));
-            // Evaluate this full partition
-            let candidates: Vec<Expression> = if partition.len() == 2 {
-                self.build_binary_partition_expressions(digits, &partition)
+            // Evaluate this full partition (streaming generation)
+            if partition.len() == 2 {
+                return self.search_binary_partition_for_target(digits, &partition, target);
             } else {
-                self.build_nary_partition_expressions(digits, &partition)
-            };
-
-            for expr in candidates {
-                if let Ok(value) = expr.evaluate() {
-                    if (value - target).abs() < EPSILON {
-                        return Some(expr);
-                    }
-                }
+                return self.search_nary_partition_for_target(digits, &partition, target);
             }
-            return None;
         }
 
         let min_end = start + 1;
@@ -113,115 +104,172 @@ impl ExpressionSolver {
             })
             .find_any(|_| true)
     }
-    fn build_small_expressions(&self, digits: &str, start: usize, end: usize) -> Vec<Expression> {
-        let mut expressions = Vec::new();
-
+    /// Enumerate expressions for a given small range without allocating large vectors.
+    /// Calls `on_expr` for each generated expression. If `on_expr` returns Some(found), propagation stops and the found value is returned.
+    fn enumerate_expressions_for_range(
+        &self,
+        digits: &str,
+        start: usize,
+        end: usize,
+        mut on_expr: impl FnMut(Expression) -> Option<Expression>,
+    ) -> Option<Expression> {
         // Base number for the range
         if let Ok(num) = digits_to_number(digits, start, end) {
-            expressions.push(Expression::Number(num));
+            if let Some(found) = on_expr(Expression::Number(num)) {
+                return Some(found);
+            }
         }
 
         let length = end - start;
         if (2..=SMALL_RANGE_THRESHOLD).contains(&length) {
-            // Parallelize partitions up to SMALL_RANGE_THRESHOLD for subranges
             let max_blocks = std::cmp::min(length, 4);
-            let mut extra: Vec<Expression> = (2..=max_blocks)
-                .into_par_iter()
-                .map(|num_blocks| {
-                    let parts = generate_partitions(start, end, num_blocks);
-                    parts
-                        .into_par_iter()
-                        .map(|partition| {
-                            if num_blocks == 2 {
-                                self.build_binary_partition_expressions(digits, &partition)
-                            } else {
-                                self.build_nary_partition_expressions(digits, &partition)
+            for num_blocks in 2..=max_blocks {
+                let partitions = generate_partitions(start, end, num_blocks);
+                for partition in partitions {
+                    if num_blocks == 2 {
+                        if let (Some(&(s1, e1)), Some(&(s2, e2))) =
+                            (partition.first(), partition.get(1))
+                        {
+                            // Enumerate left then right expressions, combine via binary ops
+                            let mut found: Option<Expression> = None;
+                            if let Some(_found_inner) =
+                                self.enumerate_expressions_for_range(digits, s1, e1, |left| {
+                                    if let Some(found_inner) = self.enumerate_expressions_for_range(
+                                        digits,
+                                        s2,
+                                        e2,
+                                        |right| {
+                                            let mut ops = ExpressionGenerator::generate_binary_ops(
+                                                &left, &right,
+                                            );
+                                            if let Some(root) =
+                                                ExpressionGenerator::generate_nth_root(
+                                                    &left, &right,
+                                                )
+                                            {
+                                                ops.push(root);
+                                            }
+                                            for expr in ops {
+                                                if let Some(x) = on_expr(expr) {
+                                                    return Some(x);
+                                                }
+                                            }
+                                            None
+                                        },
+                                    ) {
+                                        found = Some(found_inner);
+                                    }
+                                    None
+                                })
+                            {
+                                return found;
                             }
-                        })
-                        .reduce(Vec::new, |mut acc, mut v| {
-                            acc.append(&mut v);
-                            acc
-                        })
-                })
-                .reduce(Vec::new, |mut acc, mut v| {
-                    acc.append(&mut v);
-                    acc
-                });
-
-            // Add negations of composite expressions
-            let composite: Vec<Expression> = extra
-                .iter()
-                .filter(|e| !matches!(e, Expression::Neg(_)))
-                .cloned()
-                .collect();
-            extra.extend(composite.into_iter().map(|e| Expression::Neg(Box::new(e))));
-
-            expressions.append(&mut extra);
-        }
-
-        expressions
-    }
-
-    fn build_binary_partition_expressions(
-        &self,
-        digits: &str,
-        partition: &[(usize, usize)],
-    ) -> Vec<Expression> {
-        let mut out = Vec::new();
-        if let (Some(&(s1, e1)), Some(&(s2, e2))) = (partition.first(), partition.get(1)) {
-            let left = self.build_small_expressions(digits, s1, e1);
-            let right = self.build_small_expressions(digits, s2, e2);
-
-            let mut cross: Vec<Expression> = left
-                .par_iter()
-                .flat_map_iter(|l| {
-                    right.iter().flat_map(move |r| {
-                        let mut v = ExpressionGenerator::generate_binary_ops(l, r);
-                        if let Some(root) = ExpressionGenerator::generate_nth_root(l, r) {
-                            v.push(root);
+                            if found.is_some() {
+                                return found;
+                            }
                         }
-                        v
-                    })
-                })
-                .collect();
-            out.append(&mut cross);
+                    } else {
+                        // n-ary: enumerate combinations of subrange expressions
+                        let mut operands: Vec<Expression> = Vec::new();
+                        if let Some(found) = self.enumerate_nary_operands(
+                            digits,
+                            &partition,
+                            0,
+                            &mut operands,
+                            |ops_vec| {
+                                let combo = ExpressionGenerator::generate_nary_ops(ops_vec);
+                                for expr in combo {
+                                    if let Some(x) = on_expr(expr) {
+                                        return Some(x);
+                                    }
+                                }
+                                None
+                            },
+                        ) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
         }
-        out
+        None
     }
 
-    fn build_nary_partition_expressions(
+    fn enumerate_nary_operands(
         &self,
         digits: &str,
         partition: &[(usize, usize)],
-    ) -> Vec<Expression> {
-        let mut all_operands: Vec<Vec<Expression>> = Vec::new();
-        for &(s, e) in partition {
-            let sub = self.build_small_expressions(digits, s, e);
-            if sub.is_empty() {
-                return Vec::new();
-            }
-            all_operands.push(sub);
+        idx: usize,
+        current: &mut Vec<Expression>,
+        mut on_full: impl FnMut(&[Expression]) -> Option<Expression>,
+    ) -> Option<Expression> {
+        if idx == partition.len() {
+            return on_full(current);
         }
+        if let Some(&(s, e)) = partition.get(idx) {
+            return self.enumerate_expressions_for_range(digits, s, e, |expr| {
+                current.push(expr);
+                let res =
+                    self.enumerate_nary_operands(digits, partition, idx + 1, current, &mut on_full);
+                current.pop();
+                res
+            });
+        }
+        None
+    }
 
-        // Generate Cartesian product of operand choices sequentially (depths are small) then map to n-ary ops
-        let mut stack: Vec<(usize, Vec<Expression>)> = vec![(0, Vec::new())];
-        let mut results: Vec<Expression> = Vec::new();
-        while let Some((depth, current)) = stack.pop() {
-            if depth == all_operands.len() {
-                if current.len() >= 2 {
-                    results.extend(ExpressionGenerator::generate_nary_ops(&current));
+    fn search_binary_partition_for_target(
+        &self,
+        digits: &str,
+        partition: &[(usize, usize)],
+        target: f64,
+    ) -> Option<Expression> {
+        if let (Some(&(s1, e1)), Some(&(s2, e2))) = (partition.first(), partition.get(1)) {
+            let mut found: Option<Expression> = None;
+            self.enumerate_expressions_for_range(digits, s1, e1, |left| {
+                if let Some(x) = self.enumerate_expressions_for_range(digits, s2, e2, |right| {
+                    let mut ops = ExpressionGenerator::generate_binary_ops(&left, &right);
+                    if let Some(root) = ExpressionGenerator::generate_nth_root(&left, &right) {
+                        ops.push(root);
+                    }
+                    for expr in ops {
+                        if let Ok(value) = expr.evaluate() {
+                            if (value - target).abs() < EPSILON {
+                                return Some(expr);
+                            }
+                        }
+                    }
+                    None
+                }) {
+                    found = Some(x);
                 }
-                continue;
-            }
-            if let Some(level) = all_operands.get(depth) {
-                for expr in level {
-                    let mut next = current.clone();
-                    next.push(expr.clone());
-                    stack.push((depth + 1, next));
-                }
+                None
+            });
+            if found.is_some() {
+                return found;
             }
         }
-        results
+        None
+    }
+
+    fn search_nary_partition_for_target(
+        &self,
+        digits: &str,
+        partition: &[(usize, usize)],
+        target: f64,
+    ) -> Option<Expression> {
+        let mut current: Vec<Expression> = Vec::new();
+        self.enumerate_nary_operands(digits, partition, 0, &mut current, |ops_vec| {
+            let ops = ExpressionGenerator::generate_nary_ops(ops_vec);
+            for expr in ops {
+                if let Ok(value) = expr.evaluate() {
+                    if (value - target).abs() < EPSILON {
+                        return Some(expr);
+                    }
+                }
+            }
+            None
+        })
     }
 }
 

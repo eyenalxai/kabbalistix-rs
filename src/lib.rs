@@ -1,3 +1,5 @@
+#![feature(explicit_tail_calls)]
+
 //! Kabbalistix - A library for finding mathematical expressions from digit strings
 //!
 //! This library provides functionality to generate and evaluate mathematical expressions

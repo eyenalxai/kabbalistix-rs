@@ -1,3 +1,5 @@
+#![feature(explicit_tail_calls)]
+
 use kabbalistix::solver::ExpressionSolver;
 use kabbalistix::utils::validate_digit_string;
 
