@@ -72,7 +72,11 @@ fn run() -> Result<()> {
     );
     match solver.find_expression(&config.digit_string, config.target) {
         Some(expr) => {
-            println!("{}", expr);
+            // Append evaluated result for clarity
+            match expr.evaluate() {
+                Ok(value) => println!("{} = {}", expr, value),
+                Err(_) => println!("{}", expr),
+            }
             Ok(())
         }
         None => {
