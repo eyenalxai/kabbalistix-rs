@@ -4,6 +4,7 @@
 //! that can be constructed from a given string of digits to match a target value.
 
 pub mod expression;
+pub mod iterator;
 pub mod solver;
 pub mod utils;
 

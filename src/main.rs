@@ -1,5 +1,6 @@
 mod cli;
 mod expression;
+mod iterator;
 mod solver;
 mod utils;
 
