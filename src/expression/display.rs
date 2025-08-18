@@ -33,23 +33,47 @@ impl fmt::Display for Expression {
             match expr {
                 Expression::Number(n) => write!(f, "{}", n),
                 Expression::Add(l, r) => {
-                    let lp = precedence(l);
-                    let rp = precedence(r);
-                    let need_l = lp < 1; // never true; kept for symmetry/clarity
-                    let need_r = rp < 1; // never true; addition is associative
-                    write_with_parens(f, l, need_l)?;
-                    write!(f, " + ")?;
-                    write_with_parens(f, r, need_r)
+                    // Rewrite l + (-r) as l - r
+                    if let Expression::Neg(inner) = r.as_ref() {
+                        let lp = precedence(l);
+                        let need_l = lp < 1;
+                        write_with_parens(f, l, need_l)?;
+                        write!(f, " - ")?;
+                        // Right side of subtraction may need parens
+                        let rp = precedence(inner);
+                        let need_r = rp <= 1;
+                        write_with_parens(f, inner, need_r)
+                    } else {
+                        let lp = precedence(l);
+                        let rp = precedence(r);
+                        let need_l = lp < 1; // never true; kept for symmetry
+                        let need_r = rp < 1; // never true; addition is associative
+                        write_with_parens(f, l, need_l)?;
+                        write!(f, " + ")?;
+                        write_with_parens(f, r, need_r)
+                    }
                 }
                 Expression::Sub(l, r) => {
-                    let lp = precedence(l);
-                    let rp = precedence(r);
-                    let need_l = lp < 1; // never true
-                    // Right child requires parens for same or lower precedence to preserve order
-                    let need_r = rp <= 1;
-                    write_with_parens(f, l, need_l)?;
-                    write!(f, " - ")?;
-                    write_with_parens(f, r, need_r)
+                    // Rewrite l - (-r) as l + r
+                    if let Expression::Neg(inner) = r.as_ref() {
+                        let lp = precedence(l);
+                        let need_l = lp < 1;
+                        write_with_parens(f, l, need_l)?;
+                        write!(f, " + ")?;
+                        // For addition, parentheses generally not needed
+                        let rp = precedence(inner);
+                        let need_r = rp < 1; // never true
+                        write_with_parens(f, inner, need_r)
+                    } else {
+                        let lp = precedence(l);
+                        let rp = precedence(r);
+                        let need_l = lp < 1; // never true
+                        // Right child requires parens for same or lower precedence to preserve order
+                        let need_r = rp <= 1;
+                        write_with_parens(f, l, need_l)?;
+                        write!(f, " - ")?;
+                        write_with_parens(f, r, need_r)
+                    }
                 }
                 Expression::Mul(l, r) => {
                     let lp = precedence(l);
@@ -84,10 +108,15 @@ impl fmt::Display for Expression {
                     write_with_parens(f, r, need_r)
                 }
                 Expression::Neg(e) => {
-                    // Parenthesize non-atomic expressions for clarity
-                    let need = !matches!(e.as_ref(), Expression::Number(_));
-                    write!(f, "-")?;
-                    write_with_parens(f, e, need)
+                    // Simplify --x to x
+                    if let Expression::Neg(inner) = e.as_ref() {
+                        fmt_expression(f, inner)
+                    } else {
+                        // Parenthesize non-atomic expressions for clarity
+                        let need = !matches!(e.as_ref(), Expression::Number(_));
+                        write!(f, "-")?;
+                        write_with_parens(f, e, need)
+                    }
                 }
                 Expression::NthRoot(n, a) => {
                     // Render nth-root as a ^ (1 / n) using ASCII
