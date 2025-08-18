@@ -698,20 +698,38 @@ impl ExpressionIterator {
                     }
                 }
             } else {
-                // Right iterator exhausted, get next left
-                self.try_add_work_item(WorkItem {
-                    start,
-                    end,
-                    state: GenerationState::BinaryOps {
-                        partition_idx,
-                        left_range,
-                        right_range,
-                        left_iterator_state,
-                        right_iterator_state: None,
-                        current_left: None,
-                        op_idx: 0,
-                    },
-                });
+                // Right iterator exhausted for current operation
+                if op_idx < 5 {
+                    // Try next operation with same left expression
+                    self.try_add_work_item(WorkItem {
+                        start,
+                        end,
+                        state: GenerationState::BinaryOps {
+                            partition_idx,
+                            left_range,
+                            right_range,
+                            left_iterator_state,
+                            right_iterator_state: Some(ExpressionIteratorState::new()),
+                            current_left,
+                            op_idx: op_idx + 1,
+                        },
+                    });
+                } else {
+                    // All operations exhausted for current left, get next left
+                    self.try_add_work_item(WorkItem {
+                        start,
+                        end,
+                        state: GenerationState::BinaryOps {
+                            partition_idx,
+                            left_range,
+                            right_range,
+                            left_iterator_state,
+                            right_iterator_state: None,
+                            current_left: None,
+                            op_idx: 0,
+                        },
+                    });
+                }
             }
         }
         None
@@ -729,36 +747,22 @@ impl ExpressionIterator {
         right_iterator_state: Option<ExpressionIteratorState>,
         current_left: Option<Expression>,
         op_idx: usize,
-        right_state_exhausted: bool,
+        _right_state_exhausted: bool,
     ) {
-        let next_op_idx = if op_idx < 5 { op_idx + 1 } else { 0 };
-        let continue_with_same_left = op_idx < 5 || !right_state_exhausted;
-
-        if continue_with_same_left || !left_iterator_state.exhausted {
-            let next_current_left = if continue_with_same_left {
-                current_left
-            } else {
-                None
-            };
-
-            self.try_add_work_item(WorkItem {
-                start,
-                end,
-                state: GenerationState::BinaryOps {
-                    partition_idx,
-                    left_range,
-                    right_range,
-                    left_iterator_state,
-                    right_iterator_state: if continue_with_same_left {
-                        right_iterator_state
-                    } else {
-                        Some(ExpressionIteratorState::new())
-                    },
-                    current_left: next_current_left,
-                    op_idx: next_op_idx,
-                },
-            });
-        }
+        // Continue with same operation and advance right iterator
+        self.try_add_work_item(WorkItem {
+            start,
+            end,
+            state: GenerationState::BinaryOps {
+                partition_idx,
+                left_range,
+                right_range,
+                left_iterator_state,
+                right_iterator_state,
+                current_left,
+                op_idx,
+            },
+        });
     }
 
     /// Simplified n-ary operations handler
