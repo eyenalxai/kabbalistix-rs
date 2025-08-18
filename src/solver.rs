@@ -248,4 +248,44 @@ mod tests {
             println!("Found expression for 1111->4: {}", expr_str);
         }
     }
+
+    #[test]
+    fn test_six_twos_equals_four() {
+        // Test that "222222" can produce 4 via (22-22)+2+2 or similar
+        let solver = ExpressionSolver::new();
+        let result = solver.find_expression("222222", 4.0);
+
+        assert!(
+            result.is_some(),
+            "Should find an expression that equals 4 using all six 2's"
+        );
+
+        if let Some(expr) = result {
+            assert!(
+                expr.evaluate().is_ok(),
+                "Expression should evaluate successfully"
+            );
+            let value = if let Ok(v) = expr.evaluate() {
+                v
+            } else {
+                return;
+            };
+            assert!(
+                (value - 4.0).abs() < 1e-9,
+                "Expression should evaluate to 4, got {}",
+                value
+            );
+
+            let expr_str = format!("{}", expr);
+            println!("Found expression for 222222->4: {}", expr_str);
+
+            // Verify it contains six 2's
+            let two_count = expr_str.matches('2').count();
+            assert_eq!(
+                two_count, 6,
+                "Expression should contain exactly 6 twos, found {} in: {}",
+                two_count, expr_str
+            );
+        }
+    }
 }

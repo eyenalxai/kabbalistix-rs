@@ -50,7 +50,7 @@ pub enum GenerationState {
     NAryOps {
         partition_idx: usize,
         operands: Vec<Expression>,
-        op_idx: usize, // 0=Add, 1=Mul (only commutative ops make sense for n-ary)
+        op_idx: usize, // 0=Add, 1=Mul, 2=Sub (first - rest), 3=Mixed (first - second + rest)
     },
     /// Initialize binary operations for a partition with specific number of blocks
     InitBinary {
@@ -286,24 +286,20 @@ impl Iterator for ExpressionIterator {
                         } else {
                             // Handle n-ary operations (num_blocks > 2)
                             let mut operands = Vec::new();
-                            let mut all_single_digits = true;
+                            let mut all_valid = true;
 
                             // Collect operands from all blocks in the partition
                             for &(start_i, end_i) in partition {
-                                if end_i - start_i == 1 {
-                                    // Single digit - convert directly to number
-                                    if let Ok(num) = digits_to_number(&self.digits, start_i, end_i)
-                                    {
-                                        operands.push(Expression::Number(num));
-                                    }
+                                if let Ok(num) = digits_to_number(&self.digits, start_i, end_i) {
+                                    operands.push(Expression::Number(num));
                                 } else {
-                                    all_single_digits = false;
+                                    all_valid = false;
                                     break;
                                 }
                             }
 
-                            // Only generate n-ary operations if all operands are single digits
-                            if all_single_digits && operands.len() == num_blocks {
+                            // Generate n-ary operations for all valid partitions
+                            if all_valid && operands.len() == num_blocks {
                                 self.work_queue.push_back(WorkItem {
                                     start: item.start,
                                     end: item.end,
@@ -413,7 +409,7 @@ impl Iterator for ExpressionIterator {
                                 end: item.end,
                                 state: GenerationState::NAryOps {
                                     partition_idx,
-                                    operands,
+                                    operands: operands.clone(),
                                     op_idx: 1,
                                 },
                             });
@@ -431,9 +427,69 @@ impl Iterator for ExpressionIterator {
                                 result =
                                     Expression::Mul(Box::new(result), Box::new(operand.clone()));
                             }
+
+                            // Queue next operation type (subtraction)
+                            self.work_queue.push_back(WorkItem {
+                                start: item.start,
+                                end: item.end,
+                                state: GenerationState::NAryOps {
+                                    partition_idx,
+                                    operands: operands.clone(),
+                                    op_idx: 2,
+                                },
+                            });
+
                             // Only return expressions that use all digits
                             if is_full_range {
                                 return Some(result);
+                            }
+                        }
+                    } else if op_idx == 2 {
+                        // N-ary subtraction: first - (sum of rest)
+                        if let Some(first) = operands.first() {
+                            let mut result = first.clone();
+                            for operand in operands.iter().skip(1) {
+                                result =
+                                    Expression::Sub(Box::new(result), Box::new(operand.clone()));
+                            }
+
+                            // Queue mixed operation (first - second + rest)
+                            if operands.len() >= 3 {
+                                self.work_queue.push_back(WorkItem {
+                                    start: item.start,
+                                    end: item.end,
+                                    state: GenerationState::NAryOps {
+                                        partition_idx,
+                                        operands: operands.clone(),
+                                        op_idx: 3,
+                                    },
+                                });
+                            }
+
+                            // Only return expressions that use all digits
+                            if is_full_range {
+                                return Some(result);
+                            }
+                        }
+                    } else if op_idx == 3 {
+                        // Mixed operation: first - second + (sum of rest)
+                        if operands.len() >= 3 {
+                            if let (Some(first), Some(second)) = (operands.first(), operands.get(1))
+                            {
+                                let mut result = Expression::Sub(
+                                    Box::new(first.clone()),
+                                    Box::new(second.clone()),
+                                );
+                                for operand in operands.iter().skip(2) {
+                                    result = Expression::Add(
+                                        Box::new(result),
+                                        Box::new(operand.clone()),
+                                    );
+                                }
+                                // Only return expressions that use all digits
+                                if is_full_range {
+                                    return Some(result);
+                                }
                             }
                         }
                     }
