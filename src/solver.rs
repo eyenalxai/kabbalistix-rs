@@ -21,6 +21,7 @@ pub enum SolverError {
 // Default configuration constants
 const MAX_ROOT_DEGREE: f64 = 10.0;
 const EPSILON: f64 = 1e-9;
+const BATCH_SIZE: usize = 10000; // Process expressions in batches to avoid OOM
 
 /// Main solver for finding expressions that match a target value
 pub struct ExpressionSolver {
@@ -37,55 +38,141 @@ impl ExpressionSolver {
     }
 
     /// Find an expression from the given digits that evaluates to the target
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if there are issues with internal mutex locking,
+    /// which should be extremely rare in normal operation.
     pub fn find_expression(&self, digits: &str, target: f64) -> Option<Expression> {
         let all_expressions = self.generate_expressions(digits, 0, digits.len());
         let total_expressions = all_expressions.len();
 
         debug!("Generated {} expressions to evaluate", total_expressions);
+        info!(
+            "Processing {} expressions in batches of {}",
+            total_expressions, BATCH_SIZE
+        );
 
-        // Use Arc<AtomicUsize> to track counts across threads
-        let evaluated_count = Arc::new(AtomicUsize::new(0));
-        let valid_count = Arc::new(AtomicUsize::new(0));
+        // Track overall statistics
+        let mut total_evaluated = 0;
+        let mut total_valid = 0;
+        let mut closest_distance = f64::INFINITY;
+        let mut closest_expression: Option<Expression> = None;
+        let mut closest_value = 0.0;
 
-        // Use parallel iterator to find matching expression
-        let result = all_expressions.par_iter().find_map_any(|expr| {
-            // Update evaluated count
-            evaluated_count.fetch_add(1, Ordering::Relaxed);
+        // Process expressions in batches
+        for (batch_num, batch) in all_expressions.chunks(BATCH_SIZE).enumerate() {
+            debug!(
+                "Processing batch {} ({} expressions)",
+                batch_num + 1,
+                batch.len()
+            );
 
-            if let Ok(value) = expr.evaluate() {
-                // Update valid count
-                valid_count.fetch_add(1, Ordering::Relaxed);
+            // Use Arc<AtomicUsize> to track counts across threads for this batch
+            let batch_evaluated_count = Arc::new(AtomicUsize::new(0));
+            let batch_valid_count = Arc::new(AtomicUsize::new(0));
+            let batch_closest_distance = Arc::new(std::sync::Mutex::new(f64::INFINITY));
+            let batch_closest_expr = Arc::new(std::sync::Mutex::new(None::<(Expression, f64)>));
 
-                debug!("Expression {} evaluates to {}", expr, value);
-                if (value - target).abs() < EPSILON {
-                    return Some(expr.clone());
+            // Use parallel iterator to find matching expression in this batch
+            let batch_result = batch.par_iter().find_map_any(|expr| {
+                // Update batch evaluated count
+                batch_evaluated_count.fetch_add(1, Ordering::Relaxed);
+
+                if let Ok(value) = expr.evaluate() {
+                    // Update batch valid count
+                    batch_valid_count.fetch_add(1, Ordering::Relaxed);
+
+                    debug!("Expression {} evaluates to {}", expr, value);
+
+                    // Check if this is an exact match
+                    if (value - target).abs() < EPSILON {
+                        return Some(expr.clone());
+                    }
+
+                    // Track the closest result in this batch
+                    let distance = (value - target).abs();
+                    if let Ok(mut batch_closest_dist) = batch_closest_distance.lock() {
+                        if distance < *batch_closest_dist {
+                            *batch_closest_dist = distance;
+                            if let Ok(mut batch_closest) = batch_closest_expr.lock() {
+                                *batch_closest = Some((expr.clone(), value));
+                            }
+                        }
+                    }
+                } else {
+                    debug!("Expression {} failed to evaluate", expr);
                 }
-            } else {
-                debug!("Expression {} failed to evaluate", expr);
-            }
-            None
-        });
-
-        // Get final counts for logging
-        let final_evaluated = evaluated_count.load(Ordering::Relaxed);
-        let final_valid = valid_count.load(Ordering::Relaxed);
-
-        match result {
-            Some(expr) => {
-                info!(
-                    "Found match after evaluating {} expressions ({} valid)",
-                    final_evaluated, final_valid
-                );
-                Some(expr)
-            }
-            None => {
-                info!(
-                    "No match found. Evaluated {} expressions ({} valid)",
-                    final_evaluated, final_valid
-                );
                 None
+            });
+
+            // Update totals with batch results
+            let batch_evaluated = batch_evaluated_count.load(Ordering::Relaxed);
+            let batch_valid = batch_valid_count.load(Ordering::Relaxed);
+            total_evaluated += batch_evaluated;
+            total_valid += batch_valid;
+
+            // Check if we found an exact match in this batch
+            if let Some(exact_match) = batch_result {
+                info!(
+                    "Found exact match in batch {} after evaluating {} total expressions ({} valid)",
+                    batch_num + 1,
+                    total_evaluated,
+                    total_valid
+                );
+                return Some(exact_match);
+            }
+
+            // Update global closest result and get batch distance for logging
+            let batch_closest_dist =
+                if let Ok(batch_closest_dist_guard) = batch_closest_distance.lock() {
+                    let batch_closest_dist = *batch_closest_dist_guard;
+                    if batch_closest_dist < closest_distance {
+                        closest_distance = batch_closest_dist;
+                        if let Ok(batch_closest_guard) = batch_closest_expr.lock() {
+                            if let Some((expr, value)) = batch_closest_guard.as_ref() {
+                                closest_expression = Some(expr.clone());
+                                closest_value = *value;
+                            }
+                        }
+                    }
+                    batch_closest_dist
+                } else {
+                    f64::INFINITY
+                };
+
+            // Log batch results
+            info!(
+                "Batch {} complete: evaluated {} expressions ({} valid). Closest in batch: distance {:.6}",
+                batch_num + 1,
+                batch_evaluated,
+                batch_valid,
+                batch_closest_dist
+            );
+
+            // Log overall closest so far
+            if let Some(ref closest_expr) = closest_expression {
+                info!(
+                    "Overall closest so far: {} = {:.6} (distance: {:.6})",
+                    closest_expr, closest_value, closest_distance
+                );
             }
         }
+
+        // No exact match found
+        info!(
+            "No exact match found. Evaluated {} total expressions ({} valid)",
+            total_evaluated, total_valid
+        );
+
+        if let Some(closest_expr) = closest_expression {
+            info!(
+                "Closest result: {} = {:.6} (distance: {:.6})",
+                closest_expr, closest_value, closest_distance
+            );
+        }
+
+        None
     }
 
     /// Generate all possible expressions from a digit string
