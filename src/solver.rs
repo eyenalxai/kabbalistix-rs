@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_addition_case() {
+    fn test_addition_case() {
         // Test a simpler case first: "222" should be able to produce 6 via 2+2+2
         let solver = ExpressionSolver::new();
         let result = solver.find_expression("222", 6.0);

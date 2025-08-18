@@ -450,7 +450,7 @@ impl Iterator for ExpressionIterator {
                     current_left,
                     op_idx,
                 } => {
-                    if let Some(result) = self.handle_binary_ops_simple(
+                    if let Some(result) = self.handle_binary_ops(
                         item_start,
                         item_end,
                         is_full_range,
@@ -467,13 +467,9 @@ impl Iterator for ExpressionIterator {
                 }
 
                 GenerationState::NAryOps { partition, op_idx } => {
-                    if let Some(result) = self.handle_nary_ops_simple(
-                        item_start,
-                        item_end,
-                        is_full_range,
-                        partition,
-                        op_idx,
-                    ) {
+                    if let Some(result) =
+                        self.handle_nary_ops(item_start, item_end, is_full_range, partition, op_idx)
+                    {
                         return Some(result);
                     }
                 }
@@ -483,7 +479,7 @@ impl Iterator for ExpressionIterator {
                     base_iterator_state,
                     skip_base_number,
                 } => {
-                    if let Some(result) = self.handle_negations_simple(
+                    if let Some(result) = self.handle_negations(
                         item_start,
                         item_end,
                         is_full_range,
@@ -502,7 +498,7 @@ impl Iterator for ExpressionIterator {
 
 impl ExpressionIterator {
     /// Simplified binary operations handler that doesn't need to move WorkItem
-    fn handle_binary_ops_simple(
+    fn handle_binary_ops(
         &mut self,
         start: usize,
         end: usize,
@@ -534,7 +530,7 @@ impl ExpressionIterator {
 
                     // Queue next iteration
                     let right_state_exhausted = right_state.exhausted;
-                    self.queue_next_binary_iteration_simple(
+                    self.queue_next_binary_iteration(
                         start,
                         end,
                         partition_idx,
@@ -591,7 +587,7 @@ impl ExpressionIterator {
     }
 
     /// Simplified queue next binary operation iteration
-    fn queue_next_binary_iteration_simple(
+    fn queue_next_binary_iteration(
         &mut self,
         start: usize,
         end: usize,
@@ -621,7 +617,7 @@ impl ExpressionIterator {
     }
 
     /// Simplified n-ary operations handler
-    fn handle_nary_ops_simple(
+    fn handle_nary_ops(
         &mut self,
         start: usize,
         end: usize,
@@ -660,7 +656,7 @@ impl ExpressionIterator {
     }
 
     /// Simplified negation operations handler
-    fn handle_negations_simple(
+    fn handle_negations(
         &mut self,
         start: usize,
         end: usize,
