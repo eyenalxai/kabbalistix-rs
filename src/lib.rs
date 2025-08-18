@@ -16,7 +16,7 @@ pub mod utils;
 
 // Re-export the main public API
 pub use expression::{Expression, ExpressionError};
-pub use solver::{ExpressionSolver, SolverConfig, SolverError};
+pub use solver::{ExpressionSolver, SolverError};
 pub use utils::{UtilsError, validate_digit_string};
 
 /// Find an expression from the given digits that evaluates to the target value
@@ -52,6 +52,6 @@ pub fn find_expression(digits: &str, target: f64) -> Result<Option<Expression>, 
     validate_digit_string(digits)?;
 
     // Create a solver and find the expression
-    let solver = ExpressionSolver::default();
+    let solver = ExpressionSolver::new();
     Ok(solver.find_expression(digits, target))
 }

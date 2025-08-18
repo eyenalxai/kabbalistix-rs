@@ -1,3 +1,4 @@
+use log::{debug, warn};
 use thiserror::Error;
 
 /// Errors that can occur in utility functions
@@ -21,6 +22,11 @@ pub fn generate_partitions(
     end: usize,
     num_blocks: usize,
 ) -> Vec<Vec<(usize, usize)>> {
+    debug!(
+        "Generating partitions for range {}..{} with {} blocks",
+        start, end, num_blocks
+    );
+
     if num_blocks == 1 {
         return vec![vec![(start, end)]];
     }
@@ -34,12 +40,22 @@ pub fn generate_partitions(
             result.push(partition);
         }
     }
+
+    debug!("Generated {} partitions", result.len());
     result
 }
 
 /// Convert a digit range to a number
 pub fn digits_to_number(digits: &str, start: usize, end: usize) -> Result<f64, UtilsError> {
+    debug!("Converting digits[{}..{}] from '{}'", start, end, digits);
+
     if start >= digits.len() || end > digits.len() || start >= end {
+        warn!(
+            "Invalid range: start={}, end={}, length={}",
+            start,
+            end,
+            digits.len()
+        );
         return Err(UtilsError::InvalidRange {
             start,
             end,
@@ -53,19 +69,29 @@ pub fn digits_to_number(digits: &str, start: usize, end: usize) -> Result<f64, U
         length: digits.len(),
     })?;
 
-    Ok(slice.parse::<f64>().unwrap_or(0.0))
+    let result = slice.parse::<f64>().unwrap_or(0.0);
+    debug!("Converted '{}' to {}", slice, result);
+    Ok(result)
 }
 
 /// Validates that a string contains only ASCII digits
 pub fn validate_digit_string(digit_string: &str) -> Result<(), UtilsError> {
+    debug!("Validating digit string: '{}'", digit_string);
+
     if digit_string.is_empty() {
+        warn!("Digit string is empty");
         return Err(UtilsError::EmptyDigitString);
     }
 
     if !digit_string.chars().all(|c| c.is_ascii_digit()) {
+        warn!(
+            "Digit string contains non-digit characters: '{}'",
+            digit_string
+        );
         return Err(UtilsError::InvalidDigitString(digit_string.to_string()));
     }
 
+    debug!("Digit string validation successful");
     Ok(())
 }
 

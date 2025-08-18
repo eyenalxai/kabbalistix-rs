@@ -5,10 +5,33 @@
     clippy::indexing_slicing
 )]
 
-use crate::solver::{ExpressionSolver, SolverConfig};
+use crate::solver::ExpressionSolver;
 use crate::utils::validate_digit_string;
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use log::{info, warn};
+
+/// Log level for the application
+#[derive(Debug, Clone, ValueEnum)]
+pub enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub fn to_log_level_filter(&self) -> log::LevelFilter {
+        match self {
+            LogLevel::Error => log::LevelFilter::Error,
+            LogLevel::Warn => log::LevelFilter::Warn,
+            LogLevel::Info => log::LevelFilter::Info,
+            LogLevel::Debug => log::LevelFilter::Debug,
+            LogLevel::Trace => log::LevelFilter::Trace,
+        }
+    }
+}
 
 /// Kabbalistix - Find mathematical expressions from digit strings
 #[derive(Parser, Debug)]
@@ -24,25 +47,16 @@ pub struct CliArgs {
     /// Target value to match
     pub target: f64,
 
-    /// Maximum degree for nth root operations (default: 10)
-    #[arg(long, default_value = "10.0")]
-    pub max_root_degree: f64,
-
-    /// Epsilon for floating point comparison (default: 1e-9)
-    #[arg(long, default_value = "1e-9")]
-    pub epsilon: f64,
-
-    /// Enable verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
+    /// Log level (default: warn)
+    #[arg(short, long, value_enum, default_value = "warn")]
+    pub log_level: LogLevel,
 }
 
 /// Configuration for the CLI application
 pub struct CliConfig {
     pub digit_string: String,
     pub target: f64,
-    pub solver_config: SolverConfig,
-    pub verbose: bool,
+    pub log_level: LogLevel,
 }
 
 /// Parse command line arguments and return configuration
@@ -52,45 +66,42 @@ pub fn parse_args() -> Result<CliConfig> {
     // Validate digit string
     validate_digit_string(&args.digit_string).context("Invalid digit string")?;
 
-    let solver_config = SolverConfig {
-        max_root_degree: args.max_root_degree,
-        epsilon: args.epsilon,
-    };
-
     Ok(CliConfig {
         digit_string: args.digit_string,
         target: args.target,
-        solver_config,
-        verbose: args.verbose,
+        log_level: args.log_level,
     })
+}
+
+/// Initialize logging based on the provided log level
+pub fn init_logging(log_level: &LogLevel) -> Result<()> {
+    env_logger::Builder::from_default_env()
+        .filter_level(log_level.to_log_level_filter())
+        .init();
+    Ok(())
 }
 
 /// Run the main application logic
 pub fn run() -> Result<()> {
     let config = parse_args()?;
-    let solver_config = config.solver_config;
 
-    // Pass verbose flag to solver (we'll need to modify solver to handle this)
-    let solver = ExpressionSolver::new(solver_config);
+    // Initialize logging
+    init_logging(&config.log_level)?;
 
-    if config.verbose {
-        eprintln!(
-            "Searching for expressions using digits '{}' that equal {}",
-            config.digit_string, config.target
-        );
-        eprintln!(
-            "Configuration: max_root_degree={}, epsilon={}",
-            solver.config().max_root_degree,
-            solver.config().epsilon
-        );
-    }
+    let solver = ExpressionSolver::new();
 
-    match solver.find_expression_with_verbose(&config.digit_string, config.target, config.verbose) {
+    info!(
+        "Searching for expressions using digits '{}' that equal {}",
+        config.digit_string, config.target
+    );
+
+    match solver.find_expression(&config.digit_string, config.target) {
         Some(expr) => {
             println!("{}", expr);
             Ok(())
         }
         None => {
+            warn!("No matching expression found");
             println!("Unknown.");
             Ok(())
         }
@@ -126,24 +137,29 @@ mod tests {
         let args = CliArgs {
             digit_string: "123".to_string(),
             target: 6.0,
-            max_root_degree: 10.0,
-            epsilon: 1e-9,
-            verbose: false,
+            log_level: LogLevel::Warn,
         };
 
         assert_eq!(args.digit_string, "123");
         assert_eq!(args.target, 6.0);
-        assert!(!args.verbose);
+        assert!(matches!(args.log_level, LogLevel::Warn));
     }
 
     #[test]
-    fn test_solver_config_creation() {
-        let solver_config = SolverConfig {
-            max_root_degree: 5.0,
-            epsilon: 1e-6,
-        };
-
-        assert_eq!(solver_config.max_root_degree, 5.0);
-        assert_eq!(solver_config.epsilon, 1e-6);
+    fn test_log_level_conversion() {
+        assert_eq!(
+            LogLevel::Error.to_log_level_filter(),
+            log::LevelFilter::Error
+        );
+        assert_eq!(LogLevel::Warn.to_log_level_filter(), log::LevelFilter::Warn);
+        assert_eq!(LogLevel::Info.to_log_level_filter(), log::LevelFilter::Info);
+        assert_eq!(
+            LogLevel::Debug.to_log_level_filter(),
+            log::LevelFilter::Debug
+        );
+        assert_eq!(
+            LogLevel::Trace.to_log_level_filter(),
+            log::LevelFilter::Trace
+        );
     }
 }

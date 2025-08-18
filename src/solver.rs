@@ -1,5 +1,6 @@
 use crate::expression::{Expression, ExpressionError};
 use crate::utils::{UtilsError, digits_to_number, generate_partitions};
+use log::{debug, info};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -15,54 +16,25 @@ pub enum SolverError {
 /// Memoization cache for expressions
 type ExprCache = HashMap<(usize, usize), Vec<Expression>>;
 
-/// Configuration for expression generation
-pub struct SolverConfig {
-    pub max_root_degree: f64,
-    pub epsilon: f64,
-}
-
-impl Default for SolverConfig {
-    fn default() -> Self {
-        Self {
-            max_root_degree: 10.0,
-            epsilon: 1e-9,
-        }
-    }
-}
+// Default configuration constants
+const MAX_ROOT_DEGREE: f64 = 10.0;
+const EPSILON: f64 = 1e-9;
 
 /// Main solver for finding expressions that match a target value
-pub struct ExpressionSolver {
-    config: SolverConfig,
-}
+pub struct ExpressionSolver;
 
 impl ExpressionSolver {
-    pub fn new(config: SolverConfig) -> Self {
-        Self { config }
-    }
-
-    /// Get a reference to the solver configuration
-    pub fn config(&self) -> &SolverConfig {
-        &self.config
+    /// Create a new expression solver
+    pub fn new() -> Self {
+        Self
     }
 
     /// Find an expression from the given digits that evaluates to the target
     pub fn find_expression(&self, digits: &str, target: f64) -> Option<Expression> {
-        self.find_expression_with_verbose(digits, target, false)
-    }
-
-    /// Find an expression from the given digits that evaluates to the target with optional verbose output
-    pub fn find_expression_with_verbose(
-        &self,
-        digits: &str,
-        target: f64,
-        verbose: bool,
-    ) -> Option<Expression> {
         let all_expressions = self.generate_expressions(digits, 0, digits.len());
         let total_expressions = all_expressions.len();
 
-        if verbose {
-            eprintln!("Generated {} expressions to evaluate", total_expressions);
-        }
+        debug!("Generated {} expressions to evaluate", total_expressions);
 
         let mut evaluated_count = 0;
         let mut valid_count = 0;
@@ -71,24 +43,23 @@ impl ExpressionSolver {
             evaluated_count += 1;
             if let Ok(value) = expr.evaluate() {
                 valid_count += 1;
-                if (value - target).abs() < self.config.epsilon {
-                    if verbose {
-                        eprintln!(
-                            "Found match after evaluating {} expressions ({} valid)",
-                            evaluated_count, valid_count
-                        );
-                    }
+                debug!("Expression {} evaluates to {}", expr, value);
+                if (value - target).abs() < EPSILON {
+                    info!(
+                        "Found match after evaluating {} expressions ({} valid)",
+                        evaluated_count, valid_count
+                    );
                     return Some(expr);
                 }
+            } else {
+                debug!("Expression {} failed to evaluate", expr);
             }
         }
 
-        if verbose {
-            eprintln!(
-                "No match found. Evaluated {} expressions ({} valid)",
-                evaluated_count, valid_count
-            );
-        }
+        info!(
+            "No match found. Evaluated {} expressions ({} valid)",
+            evaluated_count, valid_count
+        );
         None
     }
 
@@ -174,8 +145,7 @@ impl ExpressionSolver {
             {
                 // First block must form an integer >= 2 for the root index
                 if let Ok(n_num) = digits_to_number(digits, start1, end1) {
-                    if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= self.config.max_root_degree
-                    {
+                    if n_num >= 2.0 && n_num.fract() == 0.0 && n_num <= MAX_ROOT_DEGREE {
                         let n_expr = Expression::Number(n_num);
                         let a_exprs = self.generate_expressions_memo(digits, start2, end2, cache);
 
@@ -209,7 +179,7 @@ impl ExpressionSolver {
 
 impl Default for ExpressionSolver {
     fn default() -> Self {
-        Self::new(SolverConfig::default())
+        Self::new()
     }
 }
 
@@ -221,7 +191,7 @@ mod tests {
     fn test_find_expression_with_nth_root() {
         // Test that find_expression can find nth root solutions
         // Using digits "327" to find target 3 (cube root of 27 = 3)
-        let solver = ExpressionSolver::default();
+        let solver = ExpressionSolver::new();
         let result = solver.find_expression("327", 3.0);
         assert!(result.is_some());
 
@@ -247,14 +217,10 @@ mod tests {
     }
 
     #[test]
-    fn test_solver_with_custom_config() {
-        let config = SolverConfig {
-            max_root_degree: 5.0,
-            epsilon: 1e-6,
-        };
-        let solver = ExpressionSolver::new(config);
+    fn test_solver_creation() {
+        let solver = ExpressionSolver::new();
 
-        // Should still find basic solutions
+        // Should find basic solutions
         let result = solver.find_expression("24", 6.0);
         assert!(result.is_some());
     }
