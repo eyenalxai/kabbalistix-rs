@@ -29,6 +29,11 @@ pub fn digits_to_number(digits: &str, start: usize, end: usize) -> Result<f64, U
         length: digits.len(),
     })?;
 
+    if slice.len() > 1 && slice.starts_with('0') {
+        debug!("Rejecting number with leading zero: '{}'", slice);
+        return Err(UtilsError::InvalidDigitString(slice.to_string()));
+    }
+
     let result = slice
         .parse::<f64>()
         .map_err(|_| UtilsError::InvalidDigitString(slice.to_string()))?;
