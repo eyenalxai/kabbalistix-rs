@@ -75,9 +75,13 @@ fn run() -> Result<()> {
             match expr.evaluate() {
                 Ok(value) => {
                     let display_value = if value == 0.0 { 0.0 } else { value };
-                    println!("{} = {}", expr, display_value)
+                    println!("{} = {}", expr, display_value);
+                    println!("LaTeX: ${} = {}$", expr.to_latex(), number_to_latex(display_value));
                 }
-                Err(_) => println!("{}", expr),
+                Err(_) => {
+                    println!("{}", expr);
+                    println!("LaTeX: ${}$", expr.to_latex());
+                }
             }
             Ok(())
         }
@@ -93,5 +97,17 @@ fn main() {
     if let Err(err) = run() {
         eprintln!("Error: {}", err);
         std::process::exit(1);
+    }
+}
+
+fn number_to_latex(n: f64) -> String {
+    if (n.fract() == 0.0) && n.is_finite() {
+        format!("{}", n.trunc() as i128)
+    } else if n.is_infinite() {
+        if n.is_sign_positive() { String::from("\\infty") } else { String::from("-\\infty") }
+    } else if n.is_nan() {
+        String::from("\\mathrm{NaN}")
+    } else {
+        format!("{}", n)
     }
 }
