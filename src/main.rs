@@ -15,6 +15,13 @@ pub enum LogLevel {
     Trace,
 }
 
+#[derive(Debug, Clone, ValueEnum)]
+pub enum OutputFormat {
+    Usual,
+    Latex,
+    Both,
+}
+
 impl LogLevel {
     pub fn to_log_level_filter(&self) -> log::LevelFilter {
         match self {
@@ -38,12 +45,15 @@ pub struct CliArgs {
     pub target: f64,
     #[arg(short, long, value_enum, default_value = "warn")]
     pub log_level: LogLevel,
+    #[arg(short = 'f', long, value_enum, default_value = "both")]
+    pub output_format: OutputFormat,
 }
 
 pub struct CliConfig {
     pub digit_string: String,
     pub target: f64,
     pub log_level: LogLevel,
+    pub output_format: OutputFormat,
 }
 
 fn parse_args() -> Result<CliConfig> {
@@ -53,6 +63,7 @@ fn parse_args() -> Result<CliConfig> {
         digit_string: args.digit_string,
         target: args.target,
         log_level: args.log_level,
+        output_format: args.output_format,
     })
 }
 
@@ -86,17 +97,35 @@ fn run() -> Result<()> {
                         value
                     };
 
-                    println!("{} = {}", expr, display_value);
-                    println!(
-                        "LaTeX: ${} = {}$",
-                        expr.to_latex(),
-                        number_to_latex(display_value)
-                    );
+                    match config.output_format {
+                        OutputFormat::Usual => {
+                            println!("{} = {}", expr, display_value);
+                        }
+                        OutputFormat::Latex => {
+                            println!("${} = {}$", expr.to_latex(), number_to_latex(display_value));
+                        }
+                        OutputFormat::Both => {
+                            println!("{} = {}", expr, display_value);
+                            println!(
+                                "LaTeX: ${} = {}$",
+                                expr.to_latex(),
+                                number_to_latex(display_value)
+                            );
+                        }
+                    }
                 }
-                Err(_) => {
-                    println!("{}", expr);
-                    println!("LaTeX: ${}$", expr.to_latex());
-                }
+                Err(_) => match config.output_format {
+                    OutputFormat::Usual => {
+                        println!("{}", expr);
+                    }
+                    OutputFormat::Latex => {
+                        println!("${}$", expr.to_latex());
+                    }
+                    OutputFormat::Both => {
+                        println!("{}", expr);
+                        println!("LaTeX: ${}$", expr.to_latex());
+                    }
+                },
             }
             Ok(())
         }
