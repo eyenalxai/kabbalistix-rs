@@ -31,38 +31,49 @@ impl ExpressionGenerator {
         None
     }
 
+    /// Generate combined n-ary operations from a slice of operands.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic. If fewer than 2 operands are provided,
+    /// an empty vector is returned.
     pub fn generate_nary_ops(operands: &[Expression]) -> Vec<Expression> {
         if operands.len() < 2 {
             return Vec::new();
         }
 
-        let mut results = Vec::new();
-        let first = operands.first().unwrap_or(&Expression::Number(0.0));
+        // Reserve space for up to 4 combined results (add, mul, sub, mixed)
+        let mut results = Vec::with_capacity(4);
+
+        let (first, rest) = match operands.split_first() {
+            Some((first, rest)) => (first, rest),
+            None => return results, // unreachable due to len check above
+        };
 
         let mut add_result = first.clone();
-        for operand in operands.iter().skip(1) {
+        for operand in rest.iter() {
             add_result = Expression::Add(Box::new(add_result), Box::new(operand.clone()));
         }
         results.push(add_result);
 
         let mut mul_result = first.clone();
-        for operand in operands.iter().skip(1) {
+        for operand in rest.iter() {
             mul_result = Expression::Mul(Box::new(mul_result), Box::new(operand.clone()));
         }
         results.push(mul_result);
 
         let mut sub_result = first.clone();
-        for operand in operands.iter().skip(1) {
+        for operand in rest.iter() {
             sub_result = Expression::Sub(Box::new(sub_result), Box::new(operand.clone()));
         }
         results.push(sub_result);
 
-        if operands.len() >= 3 {
+        if rest.len() >= 2 {
             let mut mixed_result = Expression::Sub(
                 Box::new(first.clone()),
-                Box::new(operands.get(1).unwrap_or(&Expression::Number(0.0)).clone()),
+                Box::new(rest.first().cloned().unwrap_or_else(|| first.clone())),
             );
-            for operand in operands.iter().skip(2) {
+            for operand in rest.iter().skip(1) {
                 mixed_result = Expression::Add(Box::new(mixed_result), Box::new(operand.clone()));
             }
             results.push(mixed_result);
@@ -84,15 +95,16 @@ impl ExpressionGenerator {
         if (2..=SMALL_RANGE_THRESHOLD).contains(&length) {
             Self::generate_small_partitioned_expressions(digits, start, end, &mut expressions);
 
-            // Add negations of composite expressions (skip base number and already negated)
-            let composite_exprs: Vec<_> = expressions
-                .iter()
-                .skip(1)
-                .filter(|expr| !matches!(expr, Expression::Neg(_)))
-                .cloned()
-                .collect();
-            for expr in composite_exprs {
-                expressions.push(Expression::Neg(Box::new(expr)));
+            // Add negations of composite expressions (skip base number)
+            // Use safe slicing via `get` to avoid indexing lints
+            let base_len = expressions.len();
+            if let Some(slice) = expressions.get(1..base_len) {
+                // Clone into a small temporary list to avoid aliasing while pushing
+                let mut to_negate: Vec<Expression> = Vec::with_capacity(slice.len());
+                to_negate.extend(slice.iter().cloned());
+                for expr in to_negate {
+                    expressions.push(Expression::Neg(Box::new(expr)));
+                }
             }
         }
 
@@ -201,7 +213,8 @@ impl ExpressionGenerator {
             return;
         }
 
-        let mut stack: Vec<(usize, Vec<Expression>)> = Vec::new();
+        let mut stack: Vec<(usize, Vec<Expression>)> =
+            Vec::with_capacity(all_operands.len().saturating_add(1));
         stack.push((0, Vec::new()));
 
         while let Some((depth, current_combo)) = stack.pop() {

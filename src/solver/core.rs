@@ -117,18 +117,30 @@ impl ExpressionSolver {
             return left_exprs
                 .par_iter()
                 .filter_map(|left| {
-                    // Inner loop can stay sequential to reduce overhead
+                    // Inner loop stays sequential to reduce parallel overhead
                     for right in &right_exprs {
-                        let mut ops = ExpressionGenerator::generate_binary_ops(left, right);
-                        if let Some(root) = ExpressionGenerator::generate_nth_root(left, right) {
-                            ops.push(root);
-                        }
-                        for expr in ops {
+                        // Evaluate candidates directly without temporary Vec allocations
+                        let candidates = [
+                            Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
+                            Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
+                        ];
+
+                        for expr in candidates {
                             if let Ok(value) = expr.evaluate()
                                 && (value - target).abs() < EPSILON
                             {
                                 return Some(expr);
                             }
+                        }
+
+                        if let Some(root) = ExpressionGenerator::generate_nth_root(left, right)
+                            && let Ok(value) = root.evaluate()
+                            && (value - target).abs() < EPSILON
+                        {
+                            return Some(root);
                         }
                     }
                     None
