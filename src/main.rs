@@ -5,6 +5,7 @@ use kabbalistix::utils::validate_digit_string;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use log::{info, warn};
+use serde::{Serialize, Serializer};
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum LogLevel {
@@ -49,6 +50,8 @@ pub struct CliArgs {
     pub log_level: LogLevel,
     #[arg(short = 'f', long, value_enum, default_value = "both")]
     pub output_format: OutputFormat,
+    #[arg(short, long, help = "Output result as JSON")]
+    pub json: bool,
 }
 
 pub struct CliConfig {
@@ -56,6 +59,7 @@ pub struct CliConfig {
     pub target: f64,
     pub log_level: LogLevel,
     pub output_format: OutputFormat,
+    pub json: bool,
 }
 
 fn parse_args() -> Result<CliConfig> {
@@ -66,6 +70,7 @@ fn parse_args() -> Result<CliConfig> {
         target: args.target,
         log_level: args.log_level,
         output_format: args.output_format,
+        json: args.json,
     })
 }
 
@@ -74,6 +79,32 @@ fn init_logging(log_level: &LogLevel) -> Result<()> {
         .filter_level(log_level.to_log_level_filter())
         .init();
     Ok(())
+}
+
+fn serialize_numeric_value<S>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(v) if v.fract() == 0.0 && v.is_finite() => serializer.serialize_i64(*v as i64),
+        Some(v) => serializer.serialize_f64(*v),
+        None => serializer.serialize_none(),
+    }
+}
+
+#[derive(Serialize)]
+struct ExpressionResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expression: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latex: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_numeric_value"
+    )]
+    value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 fn run() -> Result<()> {
@@ -86,57 +117,149 @@ fn run() -> Result<()> {
     );
     match solver.find_expression(&config.digit_string, config.target) {
         Some(expr) => {
-            match expr.evaluate() {
-                Ok(value) => {
-                    let error = (value - config.target).abs();
-
-                    // If error is within epsilon, round to target for display
-                    let display_value = if error < EPSILON {
-                        config.target
-                    } else if value == 0.0 {
-                        0.0
-                    } else {
-                        value
-                    };
-
-                    match config.output_format {
-                        OutputFormat::Usual => {
-                            println!("{} = {}", expr, display_value);
-                        }
-                        OutputFormat::Latex => {
-                            println!("${} = {}$", expr.to_latex(), number_to_latex(display_value));
-                        }
-                        OutputFormat::Both => {
-                            println!("{} = {}", expr, display_value);
-                            println!(
-                                "LaTeX: ${} = {}$",
-                                expr.to_latex(),
-                                number_to_latex(display_value)
-                            );
-                        }
-                    }
-                }
-                Err(_) => match config.output_format {
-                    OutputFormat::Usual => {
-                        println!("{}", expr);
-                    }
-                    OutputFormat::Latex => {
-                        println!("${}$", expr.to_latex());
-                    }
-                    OutputFormat::Both => {
-                        println!("{}", expr);
-                        println!("LaTeX: ${}$", expr.to_latex());
-                    }
-                },
+            if config.json {
+                output_json_result(&expr, &config)?;
+            } else {
+                output_text_result(&expr, &config)?;
             }
             Ok(())
         }
         None => {
-            warn!("No matching expression found");
-            println!("Unknown.");
+            if config.json {
+                let result = ExpressionResult {
+                    expression: None,
+                    latex: None,
+                    value: None,
+                    error: Some("No matching expression found".to_string()),
+                };
+                println!("{}", serde_json::to_string(&result)?);
+            } else {
+                warn!("No matching expression found");
+                println!("Unknown.");
+            }
             Ok(())
         }
     }
+}
+
+fn output_json_result(
+    expr: &kabbalistix::expression::Expression,
+    config: &CliConfig,
+) -> Result<()> {
+    match expr.evaluate() {
+        Ok(value) => {
+            let error = (value - config.target).abs();
+            let display_value = if error < EPSILON {
+                config.target
+            } else if value == 0.0 {
+                0.0
+            } else {
+                value
+            };
+
+            let result = match config.output_format {
+                OutputFormat::Usual => ExpressionResult {
+                    expression: Some(format!("{} = {}", expr, display_value)),
+                    latex: None,
+                    value: Some(display_value),
+                    error: None,
+                },
+                OutputFormat::Latex => ExpressionResult {
+                    expression: None,
+                    latex: Some(format!(
+                        "{} = {}",
+                        expr.to_latex(),
+                        number_to_latex(display_value)
+                    )),
+                    value: Some(display_value),
+                    error: None,
+                },
+                OutputFormat::Both => ExpressionResult {
+                    expression: Some(format!("{} = {}", expr, display_value)),
+                    latex: Some(format!(
+                        "{} = {}",
+                        expr.to_latex(),
+                        number_to_latex(display_value)
+                    )),
+                    value: Some(display_value),
+                    error: None,
+                },
+            };
+            println!("{}", serde_json::to_string(&result)?);
+        }
+        Err(eval_error) => {
+            let result = match config.output_format {
+                OutputFormat::Usual => ExpressionResult {
+                    expression: Some(expr.to_string()),
+                    latex: None,
+                    value: None,
+                    error: Some(eval_error.to_string()),
+                },
+                OutputFormat::Latex => ExpressionResult {
+                    expression: None,
+                    latex: Some(expr.to_latex()),
+                    value: None,
+                    error: Some(eval_error.to_string()),
+                },
+                OutputFormat::Both => ExpressionResult {
+                    expression: Some(expr.to_string()),
+                    latex: Some(expr.to_latex()),
+                    value: None,
+                    error: Some(eval_error.to_string()),
+                },
+            };
+            println!("{}", serde_json::to_string(&result)?);
+        }
+    }
+    Ok(())
+}
+
+fn output_text_result(
+    expr: &kabbalistix::expression::Expression,
+    config: &CliConfig,
+) -> Result<()> {
+    match expr.evaluate() {
+        Ok(value) => {
+            let error = (value - config.target).abs();
+            let display_value = if error < EPSILON {
+                config.target
+            } else if value == 0.0 {
+                0.0
+            } else {
+                value
+            };
+
+            match config.output_format {
+                OutputFormat::Usual => {
+                    println!("{} = {}", expr, display_value);
+                }
+                OutputFormat::Latex => {
+                    println!("${} = {}$", expr.to_latex(), number_to_latex(display_value));
+                }
+                OutputFormat::Both => {
+                    println!("{} = {}", expr, display_value);
+                    println!(
+                        "LaTeX: ${} = {}$",
+                        expr.to_latex(),
+                        number_to_latex(display_value)
+                    );
+                }
+            }
+        }
+        Err(_) => match config.output_format {
+            OutputFormat::Usual => {
+                println!("{}", expr);
+            }
+            OutputFormat::Latex => {
+                println!("${}$", expr.to_latex());
+            }
+            OutputFormat::Both => {
+                println!("{}", expr);
+                println!("LaTeX: ${}$", expr.to_latex());
+            }
+        },
+    }
+    Ok(())
 }
 
 fn main() {
