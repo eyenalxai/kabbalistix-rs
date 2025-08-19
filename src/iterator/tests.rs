@@ -41,6 +41,5 @@ fn iterator_generates_more_than_base_for_len_ge_2() {
 #[test]
 fn iterator_uses_all_digits_for_yielded_items() {
     let exprs = collect_all("123", 20);
-    // All items yielded by top-level iterator should use full range when returned
     assert!(!exprs.is_empty());
 }

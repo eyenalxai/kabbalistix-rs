@@ -9,30 +9,24 @@ use crate::solver::constants::EPSILON;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-// Type aliases to reduce type complexity in signatures
 type RangeKey = (usize, usize);
 type ExprVec = Arc<Vec<crate::expression::Expression>>;
 type SmallCache = Arc<Mutex<HashMap<RangeKey, ExprVec>>>;
 
-/// Main solver for finding expressions that match a target value
 pub struct ExpressionSolver {}
 
 impl ExpressionSolver {
-    /// Create a new expression solver
     pub fn new() -> Self {
         Self {}
     }
 
-    /// Find an expression from the given digits that evaluates to the target
     pub fn find_expression(&self, digits: &str, target: f64) -> Option<Expression> {
         info!("Starting fully parallel partition-based search");
 
         let len = digits.len();
 
-        // Shared cache of small-range expressions for this search invocation
         let cache: SmallCache = Arc::new(Mutex::new(HashMap::new()));
 
-        // Quick check: base number using all digits
         if let Ok(num) = digits_to_number(digits, 0, len) {
             let expr = Expression::Number(num);
             if let Ok(value) = expr.evaluate()
@@ -43,9 +37,7 @@ impl ExpressionSolver {
             }
         }
 
-        // Parallelize across top-level partitions without pre-allocating the full partition list
         for num_blocks in 2..=len {
-            // allow deep partitions; inner generation limits depth for small subranges
             let min_end = 1;
             let max_end = len - (num_blocks - 1);
 
@@ -87,7 +79,6 @@ impl ExpressionSolver {
         if remaining_blocks == 1 {
             let mut partition = current_partition;
             partition.push((start, end));
-            // Evaluate this full partition (streaming generation)
             if partition.len() == 2 {
                 return self.search_binary_partition_for_target(digits, &partition, target, cache);
             } else {
@@ -126,7 +117,6 @@ impl ExpressionSolver {
             let left_arc = Self::get_small_expressions_cached(digits, s1, e1, &cache);
             let right_arc = Self::get_small_expressions_cached(digits, s2, e2, &cache);
 
-            // Pre-evaluate values once
             let left_vals: Arc<Vec<Option<f64>>> =
                 Arc::new(left_arc.par_iter().map(|e| e.evaluate().ok()).collect());
             let right_vals: Arc<Vec<Option<f64>>> =
@@ -150,7 +140,6 @@ impl ExpressionSolver {
                                 _ => return None,
                             };
 
-                            // Fast numeric checks; only materialize expression on match
                             // Add
                             let sum = left_val + right_val;
                             if (sum - target).abs() < EPSILON {
@@ -160,7 +149,6 @@ impl ExpressionSolver {
                                 ));
                             }
 
-                            // Sub
                             let diff = left_val - right_val;
                             if (diff - target).abs() < EPSILON {
                                 return Some(Expression::Sub(
@@ -169,7 +157,6 @@ impl ExpressionSolver {
                                 ));
                             }
 
-                            // Mul
                             let prod = left_val * right_val;
                             if (prod - target).abs() < EPSILON {
                                 return Some(Expression::Mul(
@@ -178,7 +165,6 @@ impl ExpressionSolver {
                                 ));
                             }
 
-                            // Div (guard divide-by-zero)
                             if right_val != 0.0 {
                                 let quot = left_val / right_val;
                                 if (quot - target).abs() < EPSILON {
@@ -189,7 +175,6 @@ impl ExpressionSolver {
                                 }
                             }
 
-                            // Pow: restrict to small integer exponents in [-6, 6]
                             if let Some(exp) = Self::as_small_integer(right_val, -6, 6) {
                                 let pow_val = left_val.powi(exp);
                                 if pow_val.is_finite() && (pow_val - target).abs() < EPSILON {
@@ -200,7 +185,6 @@ impl ExpressionSolver {
                                 }
                             }
 
-                            // Nth root (delegated rule checks)
                             if let Some(root) = ExpressionGenerator::generate_nth_root(left, right)
                                 && let Ok(value) = root.evaluate()
                                 && (value - target).abs() < EPSILON
@@ -224,7 +208,6 @@ impl ExpressionSolver {
         target: f64,
         cache: SmallCache,
     ) -> Option<Expression> {
-        // Build operand expression lists for each subrange
         let mut all_operands: Vec<Vec<Expression>> = Vec::new();
         for &(s, e) in partition {
             let exprs_arc = Self::get_small_expressions_cached(digits, s, e, &cache);
@@ -239,7 +222,6 @@ impl ExpressionSolver {
             return None;
         }
 
-        // Fully parallel n-ary search across all operand depths
         Self::search_nary_operands_for_target(&all_operands, target)
     }
 }
@@ -251,7 +233,6 @@ impl Default for ExpressionSolver {
 }
 
 impl ExpressionSolver {
-    // Fully parallel recursive search over operand choices for n-ary partitions
     fn search_nary_operands_for_target(
         all_operands: &[Vec<Expression>],
         target: f64,
@@ -296,7 +277,6 @@ impl ExpressionSolver {
 
         recurse(all_operands, 0, Vec::new(), target)
     }
-    // Helper: get or build small-range expressions from a shared cache
     fn get_small_expressions_cached(
         digits: &str,
         start: usize,
@@ -321,7 +301,6 @@ impl ExpressionSolver {
         arc_vec
     }
 
-    // Check if a float is a small integer within [min, max]
     fn as_small_integer(value: f64, min: i32, max: i32) -> Option<i32> {
         if !value.is_finite() {
             return None;

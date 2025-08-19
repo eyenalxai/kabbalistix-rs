@@ -2,8 +2,6 @@ use log::{debug, warn};
 
 use crate::utils::errors::UtilsError;
 
-/// Convert a digit range to a number
-///
 /// # Errors
 ///
 /// Returns an error if the provided indices are out of bounds or invalid,

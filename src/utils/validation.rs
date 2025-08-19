@@ -2,8 +2,6 @@ use log::{debug, warn};
 
 use crate::utils::errors::UtilsError;
 
-/// Validates that a string contains only ASCII digits
-///
 /// # Errors
 ///
 /// Returns an error if the string is empty or contains any non-ASCII-digit characters.

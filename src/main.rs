@@ -72,7 +72,6 @@ fn run() -> Result<()> {
     );
     match solver.find_expression(&config.digit_string, config.target) {
         Some(expr) => {
-            // Append evaluated result for clarity
             match expr.evaluate() {
                 Ok(value) => {
                     let display_value = if value == 0.0 { 0.0 } else { value };

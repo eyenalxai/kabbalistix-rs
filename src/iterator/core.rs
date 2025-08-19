@@ -29,7 +29,6 @@ pub struct ExpressionIterator {
 }
 
 impl ExpressionIterator {
-    /// Add a work item to the queue if within bounds
     fn try_add_work_item(&mut self, item: WorkItem) -> bool {
         if self.work_queue.len() < MAX_WORK_QUEUE_SIZE {
             self.work_queue.push_back(item);
@@ -43,7 +42,6 @@ impl ExpressionIterator {
         }
     }
 
-    /// Extract operands from a partition
     fn extract_operands(&self, partition: &[(usize, usize)]) -> Option<Vec<Expression>> {
         let mut operands = Vec::new();
         for &(start, end) in partition {
@@ -56,12 +54,10 @@ impl ExpressionIterator {
         Some(operands)
     }
 
-    /// Check if a range should use small expression generation
     fn is_small_range(&self, start: usize, end: usize) -> bool {
         end - start <= SMALL_RANGE_THRESHOLD
     }
 
-    /// Generate the next expression for a given range and iterator state
     fn generate_next_expression(
         &mut self,
         range: (usize, usize),
@@ -73,7 +69,6 @@ impl ExpressionIterator {
 
         let (start, end) = range;
 
-        // For small ranges, generate expressions on the fly (no caching)
         if self.is_small_range(start, end) {
             let expressions = self.build_small_expressions(start, end);
             if let Some(expr) = expressions.get(state.position) {
@@ -86,7 +81,6 @@ impl ExpressionIterator {
             }
         }
 
-        // For larger ranges, generate base number only
         if state.complexity == 1
             && state.position == 0
             && let Ok(num) = digits_to_number(&self.digits, start, end)
@@ -103,7 +97,6 @@ impl ExpressionIterator {
         let mut work_queue = VecDeque::new();
         let len = digits.len();
 
-        // Start with base number generation
         work_queue.push_back(WorkItem {
             start: 0,
             end: len,
@@ -118,30 +111,18 @@ impl ExpressionIterator {
         Self { work_queue, digits }
     }
 
-    /// Create a new iterator from a `&str` of digits
     pub fn from_digits(digits: &str) -> Self {
         Self::new(digits.to_string())
     }
 
-    /// Build expressions for small ranges (delegates to shared generator)
     fn build_small_expressions(&self, start: usize, end: usize) -> Vec<Expression> {
         ExpressionGenerator::build_small_expressions(&self.digits, start, end)
     }
 
-    // Small-range generation is handled by `ExpressionGenerator`
-
-    // Caching removed for maximal parallel scalability
-
-    // generate_nary_combinations_small delegated to generator
-
-    // Handler methods for cleaner iterator logic
-
-    /// Handle base number generation
     fn handle_base_number(&mut self, item: &WorkItem, is_full_range: bool) -> Option<Expression> {
         if let Ok(num) = digits_to_number(&self.digits, item.start, item.end) {
             let length = item.end - item.start;
 
-            // Queue up partition processing if length >= 2
             if length >= 2 {
                 for num_blocks in 2..=std::cmp::min(length, 7) {
                     if !self.try_add_work_item(WorkItem {
@@ -157,7 +138,6 @@ impl ExpressionIterator {
                 }
             }
 
-            // Only return expressions that use all digits
             if is_full_range {
                 return Some(Expression::Number(num));
             }
@@ -165,7 +145,6 @@ impl ExpressionIterator {
         None
     }
 
-    /// Handle partition processing
     fn handle_partition_processing(
         &mut self,
         item: &WorkItem,
@@ -181,7 +160,6 @@ impl ExpressionIterator {
                 self.queue_nary_operations(item, partition);
             }
 
-            // Queue next partition
             self.try_add_work_item(WorkItem {
                 start: item.start,
                 end: item.end,
@@ -191,7 +169,6 @@ impl ExpressionIterator {
                 },
             });
         } else {
-            // Move to negations if this is a small range
             if item.end - item.start <= SMALL_RANGE_THRESHOLD {
                 self.try_add_work_item(WorkItem {
                     start: item.start,
@@ -206,7 +183,6 @@ impl ExpressionIterator {
         }
     }
 
-    /// Queue binary operations for a partition
     fn queue_binary_operations(
         &mut self,
         item: &WorkItem,
@@ -230,13 +206,11 @@ impl ExpressionIterator {
                 },
             });
 
-            // Queue sub-partitions for larger ranges
             self.queue_sub_partitions(start1, end1);
             self.queue_sub_partitions(start2, end2);
         }
     }
 
-    /// Queue n-ary operations for a partition
     fn queue_nary_operations(&mut self, item: &WorkItem, partition: &[(usize, usize)]) {
         if let Some(_operands) = self.extract_operands(partition) {
             self.try_add_work_item(WorkItem {
@@ -250,7 +224,6 @@ impl ExpressionIterator {
         }
     }
 
-    /// Queue sub-partitions for larger ranges
     fn queue_sub_partitions(&mut self, start: usize, end: usize) {
         if end - start > 2 {
             let sub_length = end - start;
@@ -267,7 +240,6 @@ impl ExpressionIterator {
         }
     }
 
-    /// Create a binary expression based on operation index
     fn create_binary_expression(
         &self,
         left: &Expression,
@@ -369,17 +341,14 @@ impl Iterator for ExpressionIterator {
 }
 
 impl ExpressionIterator {
-    /// Simplified binary operations handler that doesn't need to move WorkItem
     fn handle_binary_ops(&mut self, mut s: BinaryOpState) -> Option<Expression> {
-        // Get current left expression if we don't have one
         if s.current_left.is_none() {
             s.current_left =
                 self.generate_next_expression(s.left_range, &mut s.left_iterator_state);
-            s.current_left.as_ref()?; // Return None if left iterator exhausted
+            s.current_left.as_ref()?;
             s.right_iterator_state = Some(ExpressionIteratorState::new());
         }
 
-        // Get next right expression
         if s.right_iterator_state.is_none() {
             s.right_iterator_state = Some(ExpressionIteratorState::new());
         }
@@ -389,19 +358,15 @@ impl ExpressionIterator {
                 if let Some(ref left) = s.current_left {
                     let expr = self.create_binary_expression(left, &right, s.op_idx)?;
 
-                    // Queue next iteration
                     let is_full = s.is_full_range;
                     self.queue_next_binary_iteration(s);
 
-                    // Only return expressions that use all digits
                     if is_full {
                         return Some(expr);
                     }
                 }
             } else {
-                // Right iterator exhausted for current operation
                 if s.op_idx < 5 {
-                    // Try next operation with same left expression
                     self.try_add_work_item(WorkItem {
                         start: s.start,
                         end: s.end,
@@ -416,7 +381,6 @@ impl ExpressionIterator {
                         },
                     });
                 } else {
-                    // All operations exhausted for current left, get next left
                     self.try_add_work_item(WorkItem {
                         start: s.start,
                         end: s.end,
@@ -436,9 +400,7 @@ impl ExpressionIterator {
         None
     }
 
-    /// Simplified queue next binary operation iteration
     fn queue_next_binary_iteration(&mut self, s: BinaryOpState) {
-        // Continue with same operation and advance right iterator
         self.try_add_work_item(WorkItem {
             start: s.start,
             end: s.end,
@@ -454,7 +416,6 @@ impl ExpressionIterator {
         });
     }
 
-    /// Simplified n-ary operations handler
     fn handle_nary_ops(
         &mut self,
         start: usize,
@@ -463,7 +424,6 @@ impl ExpressionIterator {
         partition: Vec<(usize, usize)>,
         op_idx: usize,
     ) -> Option<Expression> {
-        // Generate operands on-demand from partition
         let operands = self.extract_operands(&partition)?;
 
         if operands.is_empty() {
@@ -473,7 +433,6 @@ impl ExpressionIterator {
         let nary_results = ExpressionGenerator::generate_nary_ops(&operands);
         let result = nary_results.get(op_idx)?;
 
-        // Queue next operation type if available
         if op_idx + 1 < nary_results.len() {
             self.try_add_work_item(WorkItem {
                 start,
@@ -485,7 +444,6 @@ impl ExpressionIterator {
             });
         }
 
-        // Only return expressions that use all digits
         if is_full_range {
             Some(result.clone())
         } else {
@@ -493,7 +451,6 @@ impl ExpressionIterator {
         }
     }
 
-    /// Simplified negation operations handler
     fn handle_negations(
         &mut self,
         start: usize,
@@ -503,15 +460,12 @@ impl ExpressionIterator {
         mut base_iterator_state: ExpressionIteratorState,
         skip_base_number: bool,
     ) -> Option<Expression> {
-        // Skip the base number if requested
         if skip_base_number {
             let _ = self.generate_next_expression(base_range, &mut base_iterator_state);
         }
 
         if let Some(expr) = self.generate_next_expression(base_range, &mut base_iterator_state) {
-            // Skip already negated expressions
             if matches!(expr, Expression::Neg(_)) {
-                // Queue next iteration without returning anything
                 if !base_iterator_state.exhausted {
                     self.try_add_work_item(WorkItem {
                         start,
@@ -526,7 +480,6 @@ impl ExpressionIterator {
                 return None;
             }
 
-            // Queue next iteration if there are more expressions
             if !base_iterator_state.exhausted {
                 self.try_add_work_item(WorkItem {
                     start,
@@ -539,7 +492,6 @@ impl ExpressionIterator {
                 });
             }
 
-            // Only return expressions that use all digits
             if is_full_range {
                 return Some(Expression::Neg(Box::new(expr)));
             }

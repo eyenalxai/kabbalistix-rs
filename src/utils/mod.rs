@@ -1,5 +1,3 @@
-//! Utils module split into submodules
-
 mod digits;
 mod errors;
 mod partitions;

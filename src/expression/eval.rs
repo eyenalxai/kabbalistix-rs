@@ -4,13 +4,11 @@ use crate::expression::ast::Expression;
 use crate::expression::errors::ExpressionError;
 
 #[inline]
-/// Check if a floating-point number is effectively zero
 fn is_zero(value: f64) -> bool {
     value.abs() < f64::EPSILON
 }
 
 #[inline]
-/// Check if a floating-point number is effectively an integer
 fn is_integer(value: f64) -> bool {
     if value.abs() > 2_f64.powi(52) {
         true
@@ -20,7 +18,6 @@ fn is_integer(value: f64) -> bool {
 }
 
 #[inline]
-/// Check if a floating-point number is an even integer
 fn is_even_integer(value: f64) -> bool {
     if !is_integer(value) {
         return false;
@@ -35,8 +32,6 @@ fn is_even_integer(value: f64) -> bool {
 }
 
 impl Expression {
-    /// Evaluates the expression and returns the result
-    ///
     /// # Errors
     ///
     /// Returns an error when attempting:

@@ -31,8 +31,6 @@ impl ExpressionGenerator {
         None
     }
 
-    /// Generate combined n-ary operations from a slice of operands.
-    ///
     /// # Panics
     ///
     /// This function does not panic. If fewer than 2 operands are provided,
@@ -42,12 +40,11 @@ impl ExpressionGenerator {
             return Vec::new();
         }
 
-        // Reserve space for up to 4 combined results (add, mul, sub, mixed)
         let mut results = Vec::with_capacity(4);
 
         let (first, rest) = match operands.split_first() {
             Some((first, rest)) => (first, rest),
-            None => return results, // unreachable due to len check above
+            None => return results,
         };
 
         let mut add_result = first.clone();
@@ -82,8 +79,7 @@ impl ExpressionGenerator {
         results
     }
 
-    /// Build expressions for a small digit range [start, end) with no caching.
-    /// Includes base number, partition-induced composites, and negations of composites.
+
     pub fn build_small_expressions(digits: &str, start: usize, end: usize) -> Vec<Expression> {
         let mut expressions = Vec::new();
 
@@ -95,11 +91,8 @@ impl ExpressionGenerator {
         if (2..=SMALL_RANGE_THRESHOLD).contains(&length) {
             Self::generate_small_partitioned_expressions(digits, start, end, &mut expressions);
 
-            // Add negations of composite expressions (skip base number)
-            // Use safe slicing via `get` to avoid indexing lints
             let base_len = expressions.len();
             if let Some(slice) = expressions.get(1..base_len) {
-                // Clone into a small temporary list to avoid aliasing while pushing
                 let mut to_negate: Vec<Expression> = Vec::with_capacity(slice.len());
                 to_negate.extend(slice.iter().cloned());
                 for expr in to_negate {

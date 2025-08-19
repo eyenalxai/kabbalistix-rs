@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-/// Errors that can occur during expression evaluation
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum ExpressionError {
     #[error("Division by zero")]

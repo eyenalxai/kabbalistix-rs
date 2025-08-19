@@ -1,5 +1,3 @@
-//! Expression module split into submodules for clarity
-
 mod ast;
 mod display;
 mod errors;

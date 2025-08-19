@@ -1,4 +1,3 @@
-/// Represents mathematical expressions that can be built from digits
 #[derive(Debug, Clone)]
 pub enum Expression {
     Number(f64),

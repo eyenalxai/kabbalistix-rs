@@ -1,7 +1,5 @@
 use log::debug;
 
-/// Generate all possible ways to partition a range of digits into consecutive blocks
-///
 /// This uses an iterative approach to avoid stack overflow with large ranges.
 pub fn generate_partitions(
     start: usize,

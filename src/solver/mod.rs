@@ -1,5 +1,3 @@
-//! Solver module split into submodules
-
 mod constants;
 mod core;
 mod errors;

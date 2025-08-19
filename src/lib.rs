@@ -49,10 +49,8 @@ pub use utils::{UtilsError, validate_digit_string};
 /// }
 /// ```
 pub fn find_expression(digits: &str, target: f64) -> Result<Option<Expression>, SolverError> {
-    // Validate the input
     validate_digit_string(digits)?;
 
-    // Create a solver and find the expression
     let solver = ExpressionSolver::new();
     Ok(solver.find_expression(digits, target))
 }

@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Errors that can occur in utility functions
+
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum UtilsError {
     #[error("Digit string cannot be empty")]
