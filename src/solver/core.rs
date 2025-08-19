@@ -6,13 +6,6 @@ use rayon::prelude::*;
 use crate::expression::Expression;
 // use crate::iterator::ExpressionIterator;
 use crate::solver::constants::EPSILON;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
-// Type aliases to reduce type complexity in signatures
-type RangeKey = (usize, usize);
-type ExprVec = Arc<Vec<crate::expression::Expression>>;
-type SmallCache = Arc<Mutex<HashMap<RangeKey, ExprVec>>>;
 
 /// Main solver for finding expressions that match a target value
 pub struct ExpressionSolver {}
@@ -28,9 +21,6 @@ impl ExpressionSolver {
         info!("Starting fully parallel partition-based search");
 
         let len = digits.len();
-
-        // Shared cache of small-range expressions for this search invocation
-        let cache: SmallCache = Arc::new(Mutex::new(HashMap::new()));
 
         // Quick check: base number using all digits
         if let Ok(num) = digits_to_number(digits, 0, len) {
@@ -57,10 +47,10 @@ impl ExpressionSolver {
                     self.search_partitions_branch(
                         digits,
                         target,
-                        (split_point, len),
+                        split_point,
+                        len,
                         num_blocks - 1,
                         prefix,
-                        Arc::clone(&cache),
                     )
                 })
                 .find_any(|_| true)
@@ -78,20 +68,19 @@ impl ExpressionSolver {
         &self,
         digits: &str,
         target: f64,
-        range: (usize, usize),
+        start: usize,
+        end: usize,
         remaining_blocks: usize,
         current_partition: Vec<(usize, usize)>,
-        cache: SmallCache,
     ) -> Option<Expression> {
-        let (start, end) = range;
         if remaining_blocks == 1 {
             let mut partition = current_partition;
             partition.push((start, end));
             // Evaluate this full partition (streaming generation)
             if partition.len() == 2 {
-                return self.search_binary_partition_for_target(digits, &partition, target, cache);
+                return self.search_binary_partition_for_target(digits, &partition, target);
             } else {
-                return self.search_nary_partition_for_target(digits, &partition, target, cache);
+                return self.search_nary_partition_for_target(digits, &partition, target);
             }
         }
 
@@ -106,10 +95,10 @@ impl ExpressionSolver {
                 self.search_partitions_branch(
                     digits,
                     target,
-                    (split_point, end),
+                    split_point,
+                    end,
                     remaining_blocks - 1,
                     next,
-                    Arc::clone(&cache),
                 )
             })
             .find_any(|_| true)
@@ -120,94 +109,40 @@ impl ExpressionSolver {
         digits: &str,
         partition: &[(usize, usize)],
         target: f64,
-        cache: SmallCache,
     ) -> Option<Expression> {
         if let (Some(&(s1, e1)), Some(&(s2, e2))) = (partition.first(), partition.get(1)) {
-            let left_arc = Self::get_small_expressions_cached(digits, s1, e1, &cache);
-            let right_arc = Self::get_small_expressions_cached(digits, s2, e2, &cache);
+            let left_exprs = ExpressionGenerator::build_small_expressions(digits, s1, e1);
+            let right_exprs = ExpressionGenerator::build_small_expressions(digits, s2, e2);
 
-            // Pre-evaluate values once
-            let left_vals: Arc<Vec<Option<f64>>> =
-                Arc::new(left_arc.par_iter().map(|e| e.evaluate().ok()).collect());
-            let right_vals: Arc<Vec<Option<f64>>> =
-                Arc::new(right_arc.par_iter().map(|e| e.evaluate().ok()).collect());
-
-            return left_arc
+            return left_exprs
                 .par_iter()
-                .enumerate()
-                .filter_map(|(i, left)| {
-                    let left_val = match left_vals.get(i).copied().flatten() {
-                        Some(v) if v.is_finite() => v,
-                        _ => return None,
-                    };
-
-                    right_arc
+                .filter_map(|left| {
+                    right_exprs
                         .par_iter()
-                        .enumerate()
-                        .filter_map(|(j, right)| {
-                            let right_val = match right_vals.get(j).copied().flatten() {
-                                Some(v) if v.is_finite() => v,
-                                _ => return None,
-                            };
+                        .filter_map(|right| {
+                            // Evaluate candidates directly without temporary Vec allocations
+                            let candidates = [
+                                Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
+                            ];
 
-                            // Fast numeric checks; only materialize expression on match
-                            // Add
-                            let sum = left_val + right_val;
-                            if (sum - target).abs() < EPSILON {
-                                return Some(Expression::Add(
-                                    Box::new(left.clone()),
-                                    Box::new(right.clone()),
-                                ));
-                            }
-
-                            // Sub
-                            let diff = left_val - right_val;
-                            if (diff - target).abs() < EPSILON {
-                                return Some(Expression::Sub(
-                                    Box::new(left.clone()),
-                                    Box::new(right.clone()),
-                                ));
-                            }
-
-                            // Mul
-                            let prod = left_val * right_val;
-                            if (prod - target).abs() < EPSILON {
-                                return Some(Expression::Mul(
-                                    Box::new(left.clone()),
-                                    Box::new(right.clone()),
-                                ));
-                            }
-
-                            // Div (guard divide-by-zero)
-                            if right_val != 0.0 {
-                                let quot = left_val / right_val;
-                                if (quot - target).abs() < EPSILON {
-                                    return Some(Expression::Div(
-                                        Box::new(left.clone()),
-                                        Box::new(right.clone()),
-                                    ));
+                            for expr in candidates {
+                                if let Ok(value) = expr.evaluate()
+                                    && (value - target).abs() < EPSILON
+                                {
+                                    return Some(expr);
                                 }
                             }
 
-                            // Pow: restrict to small integer exponents in [-6, 6]
-                            if let Some(exp) = Self::as_small_integer(right_val, -6, 6) {
-                                let pow_val = left_val.powi(exp);
-                                if pow_val.is_finite() && (pow_val - target).abs() < EPSILON {
-                                    return Some(Expression::Pow(
-                                        Box::new(left.clone()),
-                                        Box::new(right.clone()),
-                                    ));
-                                }
-                            }
-
-                            // Nth root (delegated rule checks)
                             if let Some(root) = ExpressionGenerator::generate_nth_root(left, right)
                                 && let Ok(value) = root.evaluate()
                                 && (value - target).abs() < EPSILON
                             {
                                 return Some(root);
                             }
-
                             None
                         })
                         .find_any(|_| true)
@@ -222,13 +157,11 @@ impl ExpressionSolver {
         digits: &str,
         partition: &[(usize, usize)],
         target: f64,
-        cache: SmallCache,
     ) -> Option<Expression> {
         // Build operand expression lists for each subrange
         let mut all_operands: Vec<Vec<Expression>> = Vec::new();
         for &(s, e) in partition {
-            let exprs_arc = Self::get_small_expressions_cached(digits, s, e, &cache);
-            let exprs = (*exprs_arc).clone();
+            let exprs = ExpressionGenerator::build_small_expressions(digits, s, e);
             if exprs.is_empty() {
                 return None;
             }
@@ -323,47 +256,5 @@ impl ExpressionSolver {
 impl Default for ExpressionSolver {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl ExpressionSolver {
-    // Helper: get or build small-range expressions from a shared cache
-    fn get_small_expressions_cached(
-        digits: &str,
-        start: usize,
-        end: usize,
-        cache: &SmallCache,
-    ) -> ExprVec {
-        {
-            if let Some(found) = cache
-                .lock()
-                .ok()
-                .and_then(|m| m.get(&(start, end)).cloned())
-            {
-                return found;
-            }
-        }
-
-        let built = ExpressionGenerator::build_small_expressions(digits, start, end);
-        let arc_vec: ExprVec = Arc::new(built);
-        if let Ok(mut map) = cache.lock() {
-            map.insert((start, end), Arc::clone(&arc_vec));
-        }
-        arc_vec
-    }
-
-    // Check if a float is a small integer within [min, max]
-    fn as_small_integer(value: f64, min: i32, max: i32) -> Option<i32> {
-        if !value.is_finite() {
-            return None;
-        }
-        let rounded = value.round();
-        if (rounded - value).abs() < 1e-9 {
-            let n = rounded as i32;
-            if n >= min && n <= max {
-                return Some(n);
-            }
-        }
-        None
     }
 }
