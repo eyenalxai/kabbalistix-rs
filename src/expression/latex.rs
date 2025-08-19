@@ -5,7 +5,7 @@ impl Expression {
     /// - Always shows coefficients (including 1 and -1) explicitly
     /// - Uses \cdot for multiplication
     /// - Uses \frac for division
-    /// - Renders nth roots as exponent 1/n to keep numbers explicit
+    /// - Renders nth roots as radical with explicit index
     pub fn to_latex(&self) -> String {
         fn precedence(expr: &Expression) -> u8 {
             match expr {
@@ -87,14 +87,10 @@ impl Expression {
                     format!("-1 \\cdot {}", inner)
                 }
                 Expression::NthRoot(n, a) => {
-                    // Render as a^(1/n) to keep the 1 visible
-                    let ap = precedence(a);
-                    let mut base = fmt(a);
-                    if ap < 4 {
-                        base = wrap_parens(base);
-                    }
+                    // Render as radical with explicit index for all n (including 2)
                     let n_str = fmt(n);
-                    format!("{}^{{\\left(\\frac{{1}}{{{}}}\\right)}}", base, n_str)
+                    let arg = fmt(a);
+                    format!("\\sqrt[{}]{{{}}}", n_str, arg)
                 }
             }
         }
