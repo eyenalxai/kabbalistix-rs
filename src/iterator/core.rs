@@ -1,7 +1,6 @@
 use crate::expression::Expression;
 use crate::utils::{digits_to_number, generate_partitions};
 use log::{info, warn};
-use rayon::prelude::*;
 use std::collections::VecDeque;
 
 use super::constants::{MAX_WORK_QUEUE_SIZE, SMALL_RANGE_THRESHOLD};
@@ -119,168 +118,16 @@ impl ExpressionIterator {
         Self { work_queue, digits }
     }
 
-    /// Build expressions for small ranges (no caching)
+    /// Build expressions for small ranges (delegates to shared generator)
     fn build_small_expressions(&self, start: usize, end: usize) -> Vec<Expression> {
-        let mut expressions = Vec::new();
-
-        // Base case: single number
-        if let Ok(num) = digits_to_number(&self.digits, start, end) {
-            expressions.push(Expression::Number(num));
-        }
-
-        let length = end - start;
-        if length >= 2 {
-            self.generate_small_partitioned_expressions(start, end, &mut expressions);
-            self.add_negation_expressions(&mut expressions);
-        }
-
-        expressions
+        ExpressionGenerator::build_small_expressions(&self.digits, start, end)
     }
 
-    /// Generate expressions from partitions for small ranges
-    fn generate_small_partitioned_expressions(
-        &self,
-        start: usize,
-        end: usize,
-        expressions: &mut Vec<Expression>,
-    ) {
-        let length = end - start;
-        let max_blocks = std::cmp::min(length, 4);
-
-        let mut parallel_results: Vec<Expression> = (2..=max_blocks)
-            .into_par_iter()
-            .map(|num_blocks| {
-                let partitions = generate_partitions(start, end, num_blocks);
-                partitions
-                    .into_par_iter()
-                    .map(|partition| {
-                        if num_blocks == 2 {
-                            self.generate_binary_expressions_small_partition(&partition)
-                        } else {
-                            self.generate_nary_expressions_small_partition(&partition)
-                        }
-                    })
-                    .reduce(Vec::new, |mut acc, mut v| {
-                        acc.append(&mut v);
-                        acc
-                    })
-            })
-            .reduce(Vec::new, |mut acc, mut v| {
-                acc.append(&mut v);
-                acc
-            });
-
-        expressions.append(&mut parallel_results);
-    }
-
-    /// Generate binary expressions for small ranges
-    fn generate_binary_expressions_small_partition(
-        &self,
-        partition: &[(usize, usize)],
-    ) -> Vec<Expression> {
-        let mut out = Vec::new();
-        if let (Some(&(start1, end1)), Some(&(start2, end2))) =
-            (partition.first(), partition.get(1))
-        {
-            let left_exprs = self.get_sub_expressions(start1, end1);
-            let right_exprs = self.get_sub_expressions(start2, end2);
-
-            let mut results: Vec<Expression> = left_exprs
-                .par_iter()
-                .flat_map_iter(|left| {
-                    right_exprs.iter().flat_map(move |right| {
-                        let mut local = ExpressionGenerator::generate_binary_ops(left, right);
-                        if let Some(nth_root) = ExpressionGenerator::generate_nth_root(left, right)
-                        {
-                            local.push(nth_root);
-                        }
-                        local
-                    })
-                })
-                .collect();
-
-            out.append(&mut results);
-        }
-        out
-    }
-
-    /// Generate n-ary expressions for small ranges
-    fn generate_nary_expressions_small_partition(
-        &self,
-        partition: &[(usize, usize)],
-    ) -> Vec<Expression> {
-        let mut all_operands = Vec::new();
-        for &(start_i, end_i) in partition {
-            let sub_exprs = self.get_sub_expressions(start_i, end_i);
-            if sub_exprs.is_empty() {
-                return Vec::new();
-            }
-            all_operands.push(sub_exprs);
-        }
-
-        let mut results = Vec::new();
-        self.generate_nary_combinations_small(&mut results, &all_operands, 0, Vec::new());
-        results
-    }
-
-    /// Get sub-expressions for a range (single number or recursive call)
-    fn get_sub_expressions(&self, start: usize, end: usize) -> Vec<Expression> {
-        if end - start == 1 {
-            if let Ok(num) = digits_to_number(&self.digits, start, end) {
-                vec![Expression::Number(num)]
-            } else {
-                vec![]
-            }
-        } else {
-            self.build_small_expressions(start, end)
-        }
-    }
-
-    /// Add negation expressions (skip base number and already negated expressions)
-    fn add_negation_expressions(&self, expressions: &mut Vec<Expression>) {
-        let composite_exprs: Vec<_> = expressions
-            .iter()
-            .skip(1)
-            .filter(|expr| !matches!(expr, Expression::Neg(_)))
-            .cloned()
-            .collect();
-
-        for expr in composite_exprs {
-            expressions.push(Expression::Neg(Box::new(expr)));
-        }
-    }
+    // Small-range generation is handled by `ExpressionGenerator`
 
     // Caching removed for maximal parallel scalability
 
-    /// Generate all combinations of n-ary operations for small ranges
-    fn generate_nary_combinations_small(
-        &self,
-        expressions: &mut Vec<Expression>,
-        all_operands: &[Vec<Expression>],
-        _depth: usize,
-        _current_combo: Vec<Expression>,
-    ) {
-        let mut stack: Vec<(usize, Vec<Expression>)> = Vec::new();
-        stack.push((0, Vec::new()));
-
-        while let Some((depth, current_combo)) = stack.pop() {
-            if depth == all_operands.len() {
-                if current_combo.len() >= 2 {
-                    expressions.extend(ExpressionGenerator::generate_nary_ops(&current_combo));
-                }
-                continue;
-            }
-
-            // Try each expression at this depth level
-            if let Some(operands_at_depth) = all_operands.get(depth) {
-                for expr in operands_at_depth {
-                    let mut new_combo = current_combo.clone();
-                    new_combo.push(expr.clone());
-                    stack.push((depth + 1, new_combo));
-                }
-            }
-        }
-    }
+    // generate_nary_combinations_small delegated to generator
 
     // Handler methods for cleaner iterator logic
 
