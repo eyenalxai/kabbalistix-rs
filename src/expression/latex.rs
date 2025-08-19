@@ -4,7 +4,7 @@ impl Expression {
     /// Render the expression as LaTeX without hiding numeric factors.
     /// - Always shows coefficients (including 1 and -1) explicitly
     /// - Uses \cdot for multiplication
-    /// - Uses \frac for division
+    /// - Uses inline `/` for division
     /// - Renders nth roots as radical with explicit index
     pub fn to_latex(&self) -> String {
         fn precedence(expr: &Expression) -> u8 {
@@ -64,9 +64,17 @@ impl Expression {
                     format!("{} \\cdot {}", ls, rs)
                 }
                 Expression::Div(l, r) => {
-                    let num = fmt(l);
-                    let den = fmt(r);
-                    format!("\\frac{{{}}}{{{}}}", num, den)
+                    let lp = precedence(l);
+                    let rp = precedence(r);
+                    let mut ls = fmt(l);
+                    let mut rs = fmt(r);
+                    if lp < 2 {
+                        ls = wrap_parens(ls);
+                    }
+                    if rp <= 2 {
+                        rs = wrap_parens(rs);
+                    }
+                    format!("{} / {}", ls, rs)
                 }
                 Expression::Pow(l, r) => {
                     let lp = precedence(l);
