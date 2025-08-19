@@ -75,16 +75,18 @@ fn run() -> Result<()> {
         Some(expr) => {
             match expr.evaluate() {
                 Ok(value) => {
-                    let display_value = if value == 0.0 { 0.0 } else { value };
                     let error = (value - config.target).abs();
 
-                    // Show high precision if the result is very close but not exactly equal
-                    if error > 0.0 && error < EPSILON * 100.0 {
-                        println!("{} = {:.16}", expr, display_value);
-                        println!("(Error from target: {:.2e})", error);
+                    // If error is within epsilon, round to target for display
+                    let display_value = if error < EPSILON {
+                        config.target
+                    } else if value == 0.0 {
+                        0.0
                     } else {
-                        println!("{} = {}", expr, display_value);
-                    }
+                        value
+                    };
+
+                    println!("{} = {}", expr, display_value);
                     println!(
                         "LaTeX: ${} = {}$",
                         expr.to_latex(),
