@@ -125,7 +125,7 @@ fn test_expression_display_nth_root() {
         Box::new(Expression::Number(27.0)),
     );
     let display = format!("{}", expr);
-    assert_eq!(display, "√3(27)");
+    assert_eq!(display, "27 ^ (1 / 3)");
 }
 
 #[test]

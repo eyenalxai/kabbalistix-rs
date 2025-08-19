@@ -16,7 +16,8 @@ fn test_find_expression_with_nth_root() {
         }
 
         let expr_str = format!("{}", expr);
-        assert!(expr_str.contains("√3(27)"));
+        println!("{}", expr_str);
+        assert!(expr_str.contains("27 ^ (1 / 3)"));
     }
 }
 
