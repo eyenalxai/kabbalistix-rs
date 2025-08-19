@@ -102,10 +102,8 @@ impl fmt::Display for Expression {
                 }
                 Expression::Mul(l, r) => {
                     if let Expression::Number(n) = l.as_ref() {
-                        if *n == 1.0 {
-                            if !is_literal_zero(r) {
-                                return fmt_expression(f, r);
-                            }
+                        if *n == 1.0 && !is_literal_zero(r) {
+                            return fmt_expression(f, r);
                         }
                         if *n == -1.0 {
                             if is_literal_zero(r) {
@@ -117,10 +115,8 @@ impl fmt::Display for Expression {
                         }
                     }
                     if let Expression::Number(n) = r.as_ref() {
-                        if *n == 1.0 {
-                            if !is_literal_zero(l) {
-                                return fmt_expression(f, l);
-                            }
+                        if *n == 1.0 && !is_literal_zero(l) {
+                            return fmt_expression(f, l);
                         }
                         if *n == -1.0 {
                             if is_literal_zero(l) {

@@ -168,18 +168,16 @@ impl ExpressionIterator {
                     partition_idx: partition_idx + 1,
                 },
             });
-        } else {
-            if item.end - item.start <= SMALL_RANGE_THRESHOLD {
-                self.try_add_work_item(WorkItem {
-                    start: item.start,
-                    end: item.end,
-                    state: GenerationState::Negations {
-                        base_range: (item.start, item.end),
-                        base_iterator_state: ExpressionIteratorState::new(),
-                        skip_base_number: true,
-                    },
-                });
-            }
+        } else if item.end - item.start <= SMALL_RANGE_THRESHOLD {
+            self.try_add_work_item(WorkItem {
+                start: item.start,
+                end: item.end,
+                state: GenerationState::Negations {
+                    base_range: (item.start, item.end),
+                    base_iterator_state: ExpressionIteratorState::new(),
+                    skip_base_number: true,
+                },
+            });
         }
     }
 
@@ -365,36 +363,34 @@ impl ExpressionIterator {
                         return Some(expr);
                     }
                 }
+            } else if s.op_idx < 5 {
+                self.try_add_work_item(WorkItem {
+                    start: s.start,
+                    end: s.end,
+                    state: GenerationState::BinaryOps {
+                        partition_idx: s.partition_idx,
+                        left_range: s.left_range,
+                        right_range: s.right_range,
+                        left_iterator_state: s.left_iterator_state,
+                        right_iterator_state: Some(ExpressionIteratorState::new()),
+                        current_left: s.current_left,
+                        op_idx: s.op_idx + 1,
+                    },
+                });
             } else {
-                if s.op_idx < 5 {
-                    self.try_add_work_item(WorkItem {
-                        start: s.start,
-                        end: s.end,
-                        state: GenerationState::BinaryOps {
-                            partition_idx: s.partition_idx,
-                            left_range: s.left_range,
-                            right_range: s.right_range,
-                            left_iterator_state: s.left_iterator_state,
-                            right_iterator_state: Some(ExpressionIteratorState::new()),
-                            current_left: s.current_left,
-                            op_idx: s.op_idx + 1,
-                        },
-                    });
-                } else {
-                    self.try_add_work_item(WorkItem {
-                        start: s.start,
-                        end: s.end,
-                        state: GenerationState::BinaryOps {
-                            partition_idx: s.partition_idx,
-                            left_range: s.left_range,
-                            right_range: s.right_range,
-                            left_iterator_state: s.left_iterator_state,
-                            right_iterator_state: None,
-                            current_left: None,
-                            op_idx: 0,
-                        },
-                    });
-                }
+                self.try_add_work_item(WorkItem {
+                    start: s.start,
+                    end: s.end,
+                    state: GenerationState::BinaryOps {
+                        partition_idx: s.partition_idx,
+                        left_range: s.left_range,
+                        right_range: s.right_range,
+                        left_iterator_state: s.left_iterator_state,
+                        right_iterator_state: None,
+                        current_left: None,
+                        op_idx: 0,
+                    },
+                });
             }
         }
         None
