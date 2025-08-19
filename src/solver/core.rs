@@ -117,33 +117,35 @@ impl ExpressionSolver {
             return left_exprs
                 .par_iter()
                 .filter_map(|left| {
-                    // Inner loop stays sequential to reduce parallel overhead
-                    for right in &right_exprs {
-                        // Evaluate candidates directly without temporary Vec allocations
-                        let candidates = [
-                            Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
-                            Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
-                        ];
+                    right_exprs
+                        .par_iter()
+                        .filter_map(|right| {
+                            // Evaluate candidates directly without temporary Vec allocations
+                            let candidates = [
+                                Expression::Add(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Sub(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Mul(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Div(Box::new(left.clone()), Box::new(right.clone())),
+                                Expression::Pow(Box::new(left.clone()), Box::new(right.clone())),
+                            ];
 
-                        for expr in candidates {
-                            if let Ok(value) = expr.evaluate()
+                            for expr in candidates {
+                                if let Ok(value) = expr.evaluate()
+                                    && (value - target).abs() < EPSILON
+                                {
+                                    return Some(expr);
+                                }
+                            }
+
+                            if let Some(root) = ExpressionGenerator::generate_nth_root(left, right)
+                                && let Ok(value) = root.evaluate()
                                 && (value - target).abs() < EPSILON
                             {
-                                return Some(expr);
+                                return Some(root);
                             }
-                        }
-
-                        if let Some(root) = ExpressionGenerator::generate_nth_root(left, right)
-                            && let Ok(value) = root.evaluate()
-                            && (value - target).abs() < EPSILON
-                        {
-                            return Some(root);
-                        }
-                    }
-                    None
+                            None
+                        })
+                        .find_any(|_| true)
                 })
                 .find_any(|_| true);
         }
@@ -170,41 +172,84 @@ impl ExpressionSolver {
             return None;
         }
 
-        // Parallelize by the first operand choices
+        // Parallelize by the first (and optionally second) operand choices to increase granularity
         let first = all_operands.remove(0);
-        first
-            .into_par_iter()
-            .filter_map(|first_expr| {
-                // Iterative stack over remaining operands
-                let mut stack: Vec<(usize, Vec<Expression>)> = Vec::new();
-                stack.push((0, vec![first_expr.clone()]));
 
-                while let Some((depth, current_combo)) = stack.pop() {
-                    if depth == all_operands.len() {
-                        if current_combo.len() >= 2 {
-                            let ops = ExpressionGenerator::generate_nary_ops(&current_combo);
-                            for expr in ops {
-                                if let Ok(value) = expr.evaluate()
-                                    && (value - target).abs() < EPSILON
-                                {
-                                    return Some(expr);
+        if let Some(second_list) = all_operands.first() {
+            first
+                .into_par_iter()
+                .filter_map(|first_expr| {
+                    second_list
+                        .par_iter()
+                        .filter_map(|second_expr| {
+                            // Iterative stack over remaining operands, starting after the second
+                            let mut stack: Vec<(usize, Vec<Expression>)> = Vec::new();
+                            stack.push((1, vec![first_expr.clone(), second_expr.clone()]));
+
+                            while let Some((depth, current_combo)) = stack.pop() {
+                                if depth == all_operands.len() {
+                                    if current_combo.len() >= 2 {
+                                        let ops =
+                                            ExpressionGenerator::generate_nary_ops(&current_combo);
+                                        for expr in ops {
+                                            if let Ok(value) = expr.evaluate()
+                                                && (value - target).abs() < EPSILON
+                                            {
+                                                return Some(expr);
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+
+                                if let Some(operands_at_depth) = all_operands.get(depth) {
+                                    for expr in operands_at_depth {
+                                        let mut next_combo = current_combo.clone();
+                                        next_combo.push(expr.clone());
+                                        stack.push((depth + 1, next_combo));
+                                    }
                                 }
                             }
-                        }
-                        continue;
-                    }
+                            None
+                        })
+                        .find_any(|_| true)
+                })
+                .find_any(|_| true)
+        } else {
+            first
+                .into_par_iter()
+                .filter_map(|first_expr| {
+                    // Iterative stack over remaining operands
+                    let mut stack: Vec<(usize, Vec<Expression>)> = Vec::new();
+                    stack.push((0, vec![first_expr.clone()]));
 
-                    if let Some(operands_at_depth) = all_operands.get(depth) {
-                        for expr in operands_at_depth {
-                            let mut next_combo = current_combo.clone();
-                            next_combo.push(expr.clone());
-                            stack.push((depth + 1, next_combo));
+                    while let Some((depth, current_combo)) = stack.pop() {
+                        if depth == all_operands.len() {
+                            if current_combo.len() >= 2 {
+                                let ops = ExpressionGenerator::generate_nary_ops(&current_combo);
+                                for expr in ops {
+                                    if let Ok(value) = expr.evaluate()
+                                        && (value - target).abs() < EPSILON
+                                    {
+                                        return Some(expr);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+
+                        if let Some(operands_at_depth) = all_operands.get(depth) {
+                            for expr in operands_at_depth {
+                                let mut next_combo = current_combo.clone();
+                                next_combo.push(expr.clone());
+                                stack.push((depth + 1, next_combo));
+                            }
                         }
                     }
-                }
-                None
-            })
-            .find_any(|_| true)
+                    None
+                })
+                .find_any(|_| true)
+        }
     }
 }
 
