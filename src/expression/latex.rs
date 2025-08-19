@@ -83,8 +83,7 @@ impl Expression {
                     if ep < 3 {
                         inner = wrap_parens(inner);
                     }
-                    // Do not hide the -1 factor
-                    format!("-1 \\cdot {}", inner)
+                    format!("-{}", inner)
                 }
                 Expression::NthRoot(n, a) => {
                     // Render as radical with explicit index for all n (including 2)
