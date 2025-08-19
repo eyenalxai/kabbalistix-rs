@@ -1,4 +1,5 @@
 use kabbalistix::solver::ExpressionSolver;
+use kabbalistix::solver::constants::EPSILON;
 use kabbalistix::utils::validate_digit_string;
 
 use anyhow::{Context, Result};
@@ -75,8 +76,20 @@ fn run() -> Result<()> {
             match expr.evaluate() {
                 Ok(value) => {
                     let display_value = if value == 0.0 { 0.0 } else { value };
-                    println!("{} = {}", expr, display_value);
-                    println!("LaTeX: ${} = {}$", expr.to_latex(), number_to_latex(display_value));
+                    let error = (value - config.target).abs();
+
+                    // Show high precision if the result is very close but not exactly equal
+                    if error > 0.0 && error < EPSILON * 100.0 {
+                        println!("{} = {:.16}", expr, display_value);
+                        println!("(Error from target: {:.2e})", error);
+                    } else {
+                        println!("{} = {}", expr, display_value);
+                    }
+                    println!(
+                        "LaTeX: ${} = {}$",
+                        expr.to_latex(),
+                        number_to_latex(display_value)
+                    );
                 }
                 Err(_) => {
                     println!("{}", expr);
@@ -104,7 +117,11 @@ fn number_to_latex(n: f64) -> String {
     if (n.fract() == 0.0) && n.is_finite() {
         format!("{}", n.trunc() as i128)
     } else if n.is_infinite() {
-        if n.is_sign_positive() { String::from("\\infty") } else { String::from("-\\infty") }
+        if n.is_sign_positive() {
+            String::from("\\infty")
+        } else {
+            String::from("-\\infty")
+        }
     } else if n.is_nan() {
         String::from("\\mathrm{NaN}")
     } else {
