@@ -7,5 +7,5 @@ pub enum Expression {
     Div(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
     Neg(Box<Expression>),
-    NthRoot(Box<Expression>, Box<Expression>), // NthRoot(n, a) = a^(1/n)
+    NthRoot(Box<Expression>, Box<Expression>),
 }
