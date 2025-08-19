@@ -22,10 +22,8 @@ get_unwrap = "deny"
 map_unwrap_or = "deny"
 unnecessary_unwrap = "deny"
 mem_forget = "deny"
-
 only_used_in_recursion = "deny"
 allow_attributes = "deny"
-
 
 # Documentation lints
 missing_errors_doc = "deny"
