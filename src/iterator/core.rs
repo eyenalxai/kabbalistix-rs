@@ -118,6 +118,11 @@ impl ExpressionIterator {
         Self { work_queue, digits }
     }
 
+    /// Create a new iterator from a `&str` of digits
+    pub fn from_digits(digits: &str) -> Self {
+        Self::new(digits.to_string())
+    }
+
     /// Build expressions for small ranges (delegates to shared generator)
     fn build_small_expressions(&self, start: usize, end: usize) -> Vec<Expression> {
         ExpressionGenerator::build_small_expressions(&self.digits, start, end)
