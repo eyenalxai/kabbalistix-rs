@@ -1,8 +1,10 @@
 use crate::expression::Expression;
-use crate::iterator::constants::MAX_ROOT_DEGREE;
-use crate::iterator::constants::SMALL_RANGE_THRESHOLD;
 use crate::utils::{digits_to_number, generate_partitions};
 use rayon::prelude::*;
+
+// Local copy of constraints that were previously under iterator::constants
+const MAX_ROOT_DEGREE: f64 = 10.0;
+const SMALL_RANGE_THRESHOLD: usize = 4;
 
 pub struct ExpressionGenerator;
 
@@ -31,10 +33,6 @@ impl ExpressionGenerator {
         None
     }
 
-    /// # Panics
-    ///
-    /// This function does not panic. If fewer than 2 operands are provided,
-    /// an empty vector is returned.
     pub fn generate_nary_ops(operands: &[Expression]) -> Vec<Expression> {
         if operands.len() < 2 {
             return Vec::new();
@@ -78,7 +76,6 @@ impl ExpressionGenerator {
 
         results
     }
-
 
     pub fn build_small_expressions(digits: &str, start: usize, end: usize) -> Vec<Expression> {
         let mut expressions = Vec::new();

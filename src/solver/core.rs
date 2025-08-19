@@ -1,10 +1,9 @@
-use crate::iterator::generator::ExpressionGenerator;
+use super::generator::ExpressionGenerator;
 use crate::utils::digits_to_number;
 use log::info;
 use rayon::prelude::*;
 
 use crate::expression::Expression;
-// use crate::iterator::ExpressionIterator;
 use crate::solver::constants::EPSILON;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

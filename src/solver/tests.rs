@@ -1,5 +1,3 @@
-use crate::expression::Expression;
-use crate::iterator::ExpressionIterator;
 use crate::solver::ExpressionSolver;
 
 #[test]
@@ -28,17 +26,7 @@ fn test_solver_creation() {
     assert!(result.is_some());
 }
 
-#[test]
-fn test_expression_iterator() {
-    let iter = ExpressionIterator::new("12".to_string());
-    let expressions: Vec<_> = iter.collect();
-    assert!(!expressions.is_empty());
-    assert!(
-        expressions
-            .iter()
-            .any(|e| matches!(e, Expression::Number(n) if (*n - 12.0).abs() < 1e-9))
-    );
-}
+// Iterator removed from public API; enumeration tests dropped
 
 #[test]
 fn test_seven_twos_equals_fourteen() {
