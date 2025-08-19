@@ -14,16 +14,6 @@ impl fmt::Display for Expression {
             }
         }
 
-        fn is_literal_zero(expr: &Expression) -> bool {
-            match expr {
-                Expression::Number(n) => *n == 0.0,
-                Expression::Neg(inner) => {
-                    matches!(inner.as_ref(), Expression::Number(n) if *n == 0.0)
-                }
-                _ => false,
-            }
-        }
-
         fn leading_is_unary_minus(expr: &Expression) -> bool {
             match expr {
                 Expression::Neg(_) => true,
@@ -101,32 +91,7 @@ impl fmt::Display for Expression {
                     }
                 }
                 Expression::Mul(l, r) => {
-                    if let Expression::Number(n) = l.as_ref() {
-                        if *n == 1.0 && !is_literal_zero(r) {
-                            return fmt_expression(f, r);
-                        }
-                        if *n == -1.0 {
-                            if is_literal_zero(r) {
-                                return fmt_expression(f, r);
-                            }
-                            let need = !matches!(r.as_ref(), Expression::Number(_));
-                            write!(f, "-")?;
-                            return write_with_parens(f, r, need);
-                        }
-                    }
-                    if let Expression::Number(n) = r.as_ref() {
-                        if *n == 1.0 && !is_literal_zero(l) {
-                            return fmt_expression(f, l);
-                        }
-                        if *n == -1.0 {
-                            if is_literal_zero(l) {
-                                return fmt_expression(f, l);
-                            }
-                            let need = !matches!(l.as_ref(), Expression::Number(_));
-                            write!(f, "-")?;
-                            return write_with_parens(f, l, need);
-                        }
-                    }
+                    // Always show all factors explicitly, don't hide 1 or -1
                     let lp = precedence(l);
                     let rp = precedence(r);
                     let need_l = lp < 2;
