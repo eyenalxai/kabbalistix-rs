@@ -1,6 +1,10 @@
-use kabbalistix::solver::ExpressionSolver;
-use kabbalistix::solver::constants::EPSILON;
-use kabbalistix::utils::validate_digit_string;
+mod expression;
+mod solver;
+mod utils;
+
+use solver::ExpressionSolver;
+use solver::constants::EPSILON;
+use utils::validate_digit_string;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
@@ -98,7 +102,7 @@ enum EvaluationOutcome {
 }
 
 fn evaluate_expression_for_display(
-    expr: &kabbalistix::expression::Expression,
+    expr: &expression::Expression,
     target: f64,
 ) -> EvaluationOutcome {
     match expr.evaluate() {
@@ -167,10 +171,7 @@ fn run() -> Result<()> {
     }
 }
 
-fn output_json_result(
-    expr: &kabbalistix::expression::Expression,
-    config: &CliConfig,
-) -> Result<()> {
+fn output_json_result(expr: &expression::Expression, config: &CliConfig) -> Result<()> {
     match evaluate_expression_for_display(expr, config.target) {
         EvaluationOutcome::Value(display_value) => {
             let result = match config.output_format {
@@ -230,10 +231,7 @@ fn output_json_result(
     Ok(())
 }
 
-fn output_text_result(
-    expr: &kabbalistix::expression::Expression,
-    config: &CliConfig,
-) -> Result<()> {
+fn output_text_result(expr: &expression::Expression, config: &CliConfig) -> Result<()> {
     match evaluate_expression_for_display(expr, config.target) {
         EvaluationOutcome::Value(display_value) => match config.output_format {
             OutputFormat::Usual => {
