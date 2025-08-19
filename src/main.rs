@@ -8,6 +8,7 @@ use log::{info, warn};
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum LogLevel {
+    Off,
     Error,
     Warn,
     Info,
@@ -25,6 +26,7 @@ pub enum OutputFormat {
 impl LogLevel {
     pub fn to_log_level_filter(&self) -> log::LevelFilter {
         match self {
+            LogLevel::Off => log::LevelFilter::Off,
             LogLevel::Error => log::LevelFilter::Error,
             LogLevel::Warn => log::LevelFilter::Warn,
             LogLevel::Info => log::LevelFilter::Info,
