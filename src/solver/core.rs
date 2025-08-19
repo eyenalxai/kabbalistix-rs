@@ -239,84 +239,8 @@ impl ExpressionSolver {
             return None;
         }
 
-        // Parallelize by the first (and optionally second) operand choices to increase granularity
-        let first = all_operands.remove(0);
-
-        if let Some(second_list) = all_operands.first() {
-            first
-                .into_par_iter()
-                .filter_map(|first_expr| {
-                    second_list
-                        .par_iter()
-                        .filter_map(|second_expr| {
-                            // Iterative stack over remaining operands, starting after the second
-                            let mut stack: Vec<(usize, Vec<Expression>)> = Vec::new();
-                            stack.push((1, vec![first_expr.clone(), second_expr.clone()]));
-
-                            while let Some((depth, current_combo)) = stack.pop() {
-                                if depth == all_operands.len() {
-                                    if current_combo.len() >= 2 {
-                                        let ops =
-                                            ExpressionGenerator::generate_nary_ops(&current_combo);
-                                        for expr in ops {
-                                            if let Ok(value) = expr.evaluate()
-                                                && (value - target).abs() < EPSILON
-                                            {
-                                                return Some(expr);
-                                            }
-                                        }
-                                    }
-                                    continue;
-                                }
-
-                                if let Some(operands_at_depth) = all_operands.get(depth) {
-                                    for expr in operands_at_depth {
-                                        let mut next_combo = current_combo.clone();
-                                        next_combo.push(expr.clone());
-                                        stack.push((depth + 1, next_combo));
-                                    }
-                                }
-                            }
-                            None
-                        })
-                        .find_any(|_| true)
-                })
-                .find_any(|_| true)
-        } else {
-            first
-                .into_par_iter()
-                .filter_map(|first_expr| {
-                    // Iterative stack over remaining operands
-                    let mut stack: Vec<(usize, Vec<Expression>)> = Vec::new();
-                    stack.push((0, vec![first_expr.clone()]));
-
-                    while let Some((depth, current_combo)) = stack.pop() {
-                        if depth == all_operands.len() {
-                            if current_combo.len() >= 2 {
-                                let ops = ExpressionGenerator::generate_nary_ops(&current_combo);
-                                for expr in ops {
-                                    if let Ok(value) = expr.evaluate()
-                                        && (value - target).abs() < EPSILON
-                                    {
-                                        return Some(expr);
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-
-                        if let Some(operands_at_depth) = all_operands.get(depth) {
-                            for expr in operands_at_depth {
-                                let mut next_combo = current_combo.clone();
-                                next_combo.push(expr.clone());
-                                stack.push((depth + 1, next_combo));
-                            }
-                        }
-                    }
-                    None
-                })
-                .find_any(|_| true)
-        }
+        // Fully parallel n-ary search across all operand depths
+        Self::search_nary_operands_for_target(&all_operands, target)
     }
 }
 
@@ -327,6 +251,51 @@ impl Default for ExpressionSolver {
 }
 
 impl ExpressionSolver {
+    // Fully parallel recursive search over operand choices for n-ary partitions
+    fn search_nary_operands_for_target(
+        all_operands: &[Vec<Expression>],
+        target: f64,
+    ) -> Option<Expression> {
+        if all_operands.is_empty() {
+            return None;
+        }
+
+        fn recurse(
+            all_operands: &[Vec<Expression>],
+            depth: usize,
+            current_combo: Vec<Expression>,
+            target: f64,
+        ) -> Option<Expression> {
+            if depth == all_operands.len() {
+                if current_combo.len() >= 2 {
+                    let ops = ExpressionGenerator::generate_nary_ops(&current_combo);
+                    for expr in ops {
+                        if let Ok(value) = expr.evaluate()
+                            && (value - target).abs() < EPSILON
+                        {
+                            return Some(expr);
+                        }
+                    }
+                }
+                return None;
+            }
+
+            if let Some(operands_at_depth) = all_operands.get(depth) {
+                operands_at_depth
+                    .par_iter()
+                    .filter_map(|expr| {
+                        let mut next_combo = current_combo.clone();
+                        next_combo.push(expr.clone());
+                        recurse(all_operands, depth + 1, next_combo, target)
+                    })
+                    .find_any(|_| true)
+            } else {
+                None
+            }
+        }
+
+        recurse(all_operands, 0, Vec::new(), target)
+    }
     // Helper: get or build small-range expressions from a shared cache
     fn get_small_expressions_cached(
         digits: &str,
